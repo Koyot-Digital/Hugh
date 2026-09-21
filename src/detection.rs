@@ -29,12 +29,12 @@ impl Violation {
 /// Returns the first non-allowlisted Discord invite code in `content`.
 #[must_use]
 pub fn unapproved_invite(content: &str, allowed_codes: &HashSet<String>) -> Option<String> {
-    let lower = content.to_ascii_lowercase();
     const PREFIXES: [&str; 3] = [
         "discord.gg/",
         "discord.com/invite/",
         "discordapp.com/invite/",
     ];
+    let lower = content.to_ascii_lowercase();
 
     for prefix in PREFIXES {
         let mut remaining = lower.as_str();

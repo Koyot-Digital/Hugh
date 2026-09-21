@@ -1,6 +1,5 @@
 # Discord snowflakes must be quoted so no TOML parser can lose integer precision.
 guild_id = "123456789012345678"
-alert_channel_id = "123456789012345678"
 incident_log_path = "data/incidents.jsonl"
 
 # Users with these IDs bypass message and role guards. Keep this list short.
@@ -51,3 +50,8 @@ enabled = true
 protected_role_ids = ["123456789012345678"]
 authorized_member_ids = ["123456789012345678"]
 
+[quarantine]
+enabled = true
+channel_id = "123456789012345678"
+role_id = "123456789012345678"
+store_path = "data/quarantine.jsonl"

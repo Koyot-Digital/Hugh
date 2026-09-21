@@ -3,11 +3,16 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serenity::{
+    all::{Colour, Http, Timestamp, Webhook},
+    builder::{CreateEmbed, ExecuteWebhook},
+};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::AsyncWriteExt,
     sync::Mutex,
 };
+use tracing::{error, info, warn};
 
 #[derive(Debug, Serialize)]
 pub struct Incident {
@@ -42,6 +47,45 @@ pub struct IncidentSink {
     file: Arc<Mutex<File>>,
 }
 
+pub struct IncidentReporter {
+    sink: IncidentSink,
+    webhook: Webhook,
+}
+
+impl IncidentReporter {
+    #[must_use]
+    pub const fn new(sink: IncidentSink, webhook: Webhook) -> Self {
+        Self { sink, webhook }
+    }
+
+    pub async fn report(&self, http: &Http, incident: Incident, summary: impl Into<String>) {
+        let summary = summary.into();
+        info!(
+            kind = incident.kind,
+            action = incident.action,
+            actor_id = ?incident.actor_id,
+            "security incident"
+        );
+        if let Err(error) = self.sink.record(&incident).await {
+            error!(?error, "failed to persist security incident");
+        }
+
+        let embed = CreateEmbed::new()
+            .title("Hugh security incident")
+            .description(summary)
+            .field("Type", &incident.kind, true)
+            .field("Action", &incident.action, true)
+            .colour(Colour::from_rgb(215, 58, 73))
+            .timestamp(Timestamp::now());
+        let message = ExecuteWebhook::new()
+            .username("Hugh Security")
+            .embed(embed);
+        if let Err(error) = self.webhook.execute(http, false, message).await {
+            warn!(?error, "failed to deliver incident webhook");
+        }
+    }
+}
+
 impl IncidentSink {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -72,6 +116,7 @@ impl IncidentSink {
             .await
             .context("failed to write incident")?;
         file.flush().await.context("failed to flush incident")?;
+        drop(file);
         Ok(())
     }
 }

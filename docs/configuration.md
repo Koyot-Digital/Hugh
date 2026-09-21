@@ -15,13 +15,17 @@ integer value.
 | `trusted_user_ids` | Users that bypass message guards and raid enforcement. |
 | `trusted_role_ids` | Roles that bypass message guards. Use very sparingly. |
 
-Bot users and webhook messages are ignored to avoid moderation loops.
+Hugh ignores only its own messages to avoid moderation loops. Messages from
+other bots and webhooks are checked and can be deleted, but automated senders
+are not timed out because Discord does not treat them like ordinary members.
 
 ## `[mentions]`
 
-- `max_total_mentions`: maximum `<@user>` and `<@&role>` tokens plus
-  `@everyone`/`@here` tokens in one message. A violation deletes and times out.
-- `max_everyone_mentions`: maximum combined `@everyone` and `@here` tokens.
+- `max_total_mentions`: maximum actual user and role mentions plus an active
+  `@everyone`/`@here` mention in one message. A violation deletes and times out.
+- `max_everyone_mentions`: use `0` to block active `@everyone`/`@here` mentions;
+  a positive value allows them through this check. Discord exposes this as a
+  per-message flag rather than a count.
 - `protected_role_ids`: staff or incident-response roles whose pings are
   rate-limited.
 - `protected_role_max_pings`: allowed protected-role-pinging messages per user

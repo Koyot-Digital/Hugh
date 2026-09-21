@@ -9,8 +9,6 @@ use tokio::fs;
 pub struct Config {
     #[serde(deserialize_with = "snowflake")]
     pub guild_id: u64,
-    #[serde(deserialize_with = "snowflake")]
-    pub alert_channel_id: u64,
     #[serde(default = "default_incident_path")]
     pub incident_log_path: String,
     #[serde(default, deserialize_with = "snowflakes")]
@@ -27,6 +25,8 @@ pub struct Config {
     pub raids: RaidConfig,
     #[serde(default)]
     pub role_guard: RoleGuardConfig,
+    #[serde(default)]
+    pub quarantine: QuarantineConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +142,28 @@ pub struct RoleGuardConfig {
     pub authorized_member_ids: HashSet<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QuarantineConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "optional_snowflake")]
+    pub channel_id: Option<u64>,
+    #[serde(deserialize_with = "optional_snowflake")]
+    pub role_id: Option<u64>,
+    pub store_path: String,
+}
+
+impl Default for QuarantineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: None,
+            role_id: None,
+            store_path: "data/quarantine.jsonl".to_owned(),
+        }
+    }
+}
+
 impl Config {
     pub async fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
@@ -154,33 +176,33 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.guild_id == 0 || self.alert_channel_id == 0 {
-            bail!("guild_id and alert_channel_id must be non-zero Discord IDs");
+        if self.guild_id == 0 {
+            bail!("guild_id must be a non-zero Discord ID");
         }
         if self.incident_log_path.trim().is_empty() {
             bail!("incident_log_path must not be empty");
         }
         positive(
             "mentions.protected_role_max_pings",
-            self.mentions.protected_role_max_pings,
+            &self.mentions.protected_role_max_pings,
         )?;
         positive(
             "mentions.protected_role_window_seconds",
-            self.mentions.protected_role_window_seconds,
+            &self.mentions.protected_role_window_seconds,
         )?;
-        positive("mentions.timeout_seconds", self.mentions.timeout_seconds)?;
-        positive("spam.max_messages", self.spam.max_messages)?;
-        positive("spam.window_seconds", self.spam.window_seconds)?;
-        positive("spam.max_duplicates", self.spam.max_duplicates)?;
+        positive("mentions.timeout_seconds", &self.mentions.timeout_seconds)?;
+        positive("spam.max_messages", &self.spam.max_messages)?;
+        positive("spam.window_seconds", &self.spam.window_seconds)?;
+        positive("spam.max_duplicates", &self.spam.max_duplicates)?;
         positive(
             "spam.duplicate_window_seconds",
-            self.spam.duplicate_window_seconds,
+            &self.spam.duplicate_window_seconds,
         )?;
-        positive("spam.timeout_seconds", self.spam.timeout_seconds)?;
-        positive("raids.join_threshold", self.raids.join_threshold)?;
-        positive("raids.join_window_seconds", self.raids.join_window_seconds)?;
-        positive("raids.raid_mode_seconds", self.raids.raid_mode_seconds)?;
-        positive("raids.timeout_seconds", self.raids.timeout_seconds)?;
+        positive("spam.timeout_seconds", &self.spam.timeout_seconds)?;
+        positive("raids.join_threshold", &self.raids.join_threshold)?;
+        positive("raids.join_window_seconds", &self.raids.join_window_seconds)?;
+        positive("raids.raid_mode_seconds", &self.raids.raid_mode_seconds)?;
+        positive("raids.timeout_seconds", &self.raids.timeout_seconds)?;
         if self.raids.minimum_account_age_seconds < 0 {
             bail!("raids.minimum_account_age_seconds cannot be negative");
         }
@@ -189,6 +211,20 @@ impl Config {
         }
         if self.mentions.enabled && self.mentions.max_total_mentions == 0 {
             bail!("mentions.max_total_mentions must be positive");
+        }
+        if self.quarantine.enabled {
+            if self.quarantine.channel_id.is_none() || self.quarantine.role_id.is_none() {
+                bail!("quarantine.channel_id and quarantine.role_id are required when enabled");
+            }
+            if self.quarantine.store_path.trim().is_empty() {
+                bail!("quarantine.store_path must not be empty");
+            }
+            if self.quarantine.role_id.is_some_and(|role| {
+                self.trusted_role_ids.contains(&role)
+                    || self.role_guard.protected_role_ids.contains(&role)
+            }) {
+                bail!("the quarantine role cannot be trusted or protected");
+            }
         }
         Ok(())
     }
@@ -202,11 +238,11 @@ impl Config {
     }
 }
 
-fn positive<T>(name: &str, value: T) -> Result<()>
+fn positive<T>(name: &str, value: &T) -> Result<()>
 where
     T: PartialEq + From<u8>,
 {
-    if value == T::from(0) {
+    if *value == T::from(0) {
         bail!("{name} must be positive");
     }
     Ok(())
@@ -235,6 +271,15 @@ where
         .collect()
 }
 
+fn optional_snowflake<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| value.parse().map_err(serde::de::Error::custom))
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +288,6 @@ mod tests {
     fn rejects_unknown_keys() {
         let result = toml::from_str::<Config>(
             r#"guild_id = "1"
-alert_channel_id = "2"
 surprise = true"#,
         );
         assert!(result.is_err());
@@ -253,7 +297,6 @@ surprise = true"#,
     fn trusted_role_grants_bypass() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
-alert_channel_id = "2"
 trusted_role_ids = ["99"]"#,
         )
         .unwrap();

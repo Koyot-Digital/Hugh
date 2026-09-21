@@ -39,8 +39,7 @@ impl Handler {
             return;
         };
         if guild_id.get() != self.config.guild_id
-            || message.author.bot
-            || message.webhook_id.is_some()
+            || message.author.id == ctx.cache.current_user().id
         {
             return;
         }
@@ -52,9 +51,8 @@ impl Handler {
             return;
         }
 
-        let everyone_mentions =
-            message.content.matches("@everyone").count() + message.content.matches("@here").count();
-        let explicit_mentions = message.content.matches("<@").count();
+        let everyone_mentions = usize::from(message.mention_everyone);
+        let explicit_mentions = message.mentions.len() + message.mention_roles.len();
         let mentioned_roles: Vec<u64> = message.mention_roles.iter().map(|id| id.get()).collect();
         let input = MessageInput {
             user_id: message.author.id.get(),
@@ -90,7 +88,8 @@ impl Handler {
         } else {
             "delete_failed"
         };
-        if decision.timeout_seconds > 0 {
+        let automated_sender = message.author.bot || message.webhook_id.is_some();
+        if decision.timeout_seconds > 0 && !automated_sender {
             match timeout_member(ctx, guild_id, message.author.id, decision.timeout_seconds).await {
                 Ok(()) => action = "message_deleted_and_member_timed_out",
                 Err(error) => {
@@ -115,7 +114,7 @@ impl Handler {
             ctx,
             incident,
             format!(
-                "Message guard: user {} in channel {} — {reasons} ({action})",
+                "Message guard: user {} in channel {} - {reasons} ({action})",
                 message.author.id.get(),
                 message.channel_id.get()
             ),
@@ -124,7 +123,9 @@ impl Handler {
     }
 
     async fn handle_join(&self, ctx: &Context, mut member: Member) {
-        if member.guild_id.get() != self.config.guild_id || member.user.bot {
+        if member.guild_id.get() != self.config.guild_id
+            || member.user.id == ctx.cache.current_user().id
+        {
             return;
         }
         let now_unix = Utc::now().timestamp();
@@ -210,7 +211,9 @@ impl Handler {
     }
 
     async fn handle_member_update(&self, ctx: &Context, member: Member) {
-        if member.guild_id.get() != self.config.guild_id || member.user.bot {
+        if member.guild_id.get() != self.config.guild_id
+            || member.user.id == ctx.cache.current_user().id
+        {
             return;
         }
         let roles = member.roles.iter().map(|role| role.get());
@@ -305,11 +308,24 @@ impl EventHandler for Handler {
         ctx: Context,
         _old_if_available: Option<Member>,
         new: Option<Member>,
-        _event: serenity::all::GuildMemberUpdateEvent,
+        event: serenity::all::GuildMemberUpdateEvent,
     ) {
-        if let Some(member) = new {
-            self.handle_member_update(&ctx, member).await;
-        }
+        let member = if let Some(member) = new {
+            member
+        } else {
+            match event.guild_id.member(&ctx.http, event.user.id).await {
+                Ok(member) => member,
+                Err(error) => {
+                    error!(
+                        ?error,
+                        user_id = event.user.id.get(),
+                        "failed to fetch member after uncached update"
+                    );
+                    return;
+                }
+            }
+        };
+        self.handle_member_update(&ctx, member).await;
     }
 }
 

@@ -27,7 +27,7 @@ pub struct MessageDecision {
 
 impl MessageDecision {
     #[must_use]
-    pub const fn should_delete(&self) -> bool {
+    pub fn should_delete(&self) -> bool {
         !self.violations.is_empty()
     }
 }
@@ -171,6 +171,7 @@ impl SecurityState {
             decision.timeout_seconds = decision.timeout_seconds.max(config.invites.timeout_seconds);
         }
 
+        drop(state);
         decision
     }
 
@@ -251,7 +252,6 @@ mod tests {
     fn config() -> Config {
         Config {
             guild_id: 1,
-            alert_channel_id: 2,
             incident_log_path: "ignored".into(),
             trusted_user_ids: HashSet::new(),
             trusted_role_ids: HashSet::new(),
@@ -260,6 +260,7 @@ mod tests {
             invites: InviteConfig::default(),
             raids: RaidConfig::default(),
             role_guard: RoleGuardConfig::default(),
+            quarantine: crate::config::QuarantineConfig::default(),
         }
     }
 
@@ -316,5 +317,78 @@ mod tests {
         assert!(result.raid_active);
         assert!(result.raid_activated);
         assert!(result.young_account);
+    }
+
+    #[test]
+    fn flood_limit_is_inclusive_and_expires() {
+        let mut config = config();
+        config.mentions.enabled = false;
+        config.spam.max_messages = 2;
+        config.spam.max_duplicates = 10;
+        config.spam.window_seconds = 5;
+        let state = SecurityState::new(&config);
+        let start = Instant::now();
+        let input = MessageInput {
+            user_id: 3,
+            content: "one",
+            total_mentions: 0,
+            everyone_mentions: 0,
+            mentioned_roles: &[],
+        };
+
+        assert!(
+            !state
+                .inspect_message(&input, &config, start)
+                .should_delete()
+        );
+        assert!(
+            !state
+                .inspect_message(&input, &config, start + Duration::from_secs(1))
+                .should_delete()
+        );
+        assert!(
+            state
+                .inspect_message(&input, &config, start + Duration::from_secs(2))
+                .violations
+                .contains(&Violation::MessageFlood)
+        );
+        assert!(
+            !state
+                .inspect_message(&input, &config, start + Duration::from_secs(8))
+                .should_delete()
+        );
+    }
+
+    #[test]
+    fn invite_guard_respects_allowlist() {
+        let mut config = config();
+        config.mentions.enabled = false;
+        config.spam.enabled = false;
+        config.invites.enabled = true;
+        config.invites.allowed_codes.insert("home".into());
+        let state = SecurityState::new(&config);
+        let start = Instant::now();
+
+        let allowed = MessageInput {
+            user_id: 3,
+            content: "https://discord.gg/home",
+            total_mentions: 0,
+            everyone_mentions: 0,
+            mentioned_roles: &[],
+        };
+        assert!(
+            !state
+                .inspect_message(&allowed, &config, start)
+                .should_delete()
+        );
+
+        let blocked = MessageInput {
+            content: "https://discord.gg/other",
+            ..allowed
+        };
+        assert_eq!(
+            state.inspect_message(&blocked, &config, start).violations,
+            vec![Violation::UnapprovedInvite]
+        );
     }
 }
