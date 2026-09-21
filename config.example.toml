@@ -1,0 +1,53 @@
+# Discord snowflakes must be quoted so no TOML parser can lose integer precision.
+guild_id = "123456789012345678"
+alert_channel_id = "123456789012345678"
+incident_log_path = "data/incidents.jsonl"
+
+# Users with these IDs bypass message and role guards. Keep this list short.
+trusted_user_ids = ["123456789012345678"]
+
+# Members with one of these roles bypass message guards. Do not put a general
+# staff role here if you want its members to remain protected from compromise.
+trusted_role_ids = []
+
+[mentions]
+enabled = true
+max_total_mentions = 5
+max_everyone_mentions = 0
+timeout_seconds = 600
+
+# The third protected-role ping by one user inside 20 seconds is blocked.
+protected_role_ids = ["123456789012345678"]
+protected_role_max_pings = 2
+protected_role_window_seconds = 20
+
+[spam]
+enabled = true
+max_messages = 7
+window_seconds = 8
+max_duplicates = 3
+duplicate_window_seconds = 30
+timeout_seconds = 300
+
+[invites]
+enabled = true
+# Invites to your own community can be added here without the discord.gg/ part.
+allowed_codes = []
+timeout_seconds = 300
+
+[raids]
+enabled = true
+join_threshold = 10
+join_window_seconds = 15
+raid_mode_seconds = 600
+minimum_account_age_seconds = 86400
+# Supported values: "log", "timeout", "kick". Start with "log" while tuning.
+young_account_action = "log"
+timeout_seconds = 3600
+
+[role_guard]
+enabled = true
+# Hugh removes these roles from every user not in authorized_member_ids.
+protected_role_ids = ["123456789012345678"]
+authorized_member_ids = ["123456789012345678"]
+
