@@ -1,0 +1,19 @@
+services:
+  hugh:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN in .env}
+      RUST_LOG: ${RUST_LOG:-hugh=info}
+      HUGH_LOG_FORMAT: ${HUGH_LOG_FORMAT:-json}
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - hugh-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  hugh-data:

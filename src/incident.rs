@@ -45,10 +45,13 @@ pub struct IncidentSink {
 impl IncidentSink {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create incident directory {}", parent.display()))?;
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).await.with_context(|| {
+                format!("failed to create incident directory {}", parent.display())
+            })?;
         }
         let file = OpenOptions::new()
             .create(true)
@@ -56,14 +59,18 @@ impl IncidentSink {
             .open(path)
             .await
             .with_context(|| format!("failed to open incident log {}", path.display()))?;
-        Ok(Self { file: Arc::new(Mutex::new(file)) })
+        Ok(Self {
+            file: Arc::new(Mutex::new(file)),
+        })
     }
 
     pub async fn record(&self, incident: &Incident) -> Result<()> {
         let mut line = serde_json::to_vec(incident).context("failed to serialize incident")?;
         line.push(b'\n');
         let mut file = self.file.lock().await;
-        file.write_all(&line).await.context("failed to write incident")?;
+        file.write_all(&line)
+            .await
+            .context("failed to write incident")?;
         file.flush().await.context("failed to flush incident")?;
         Ok(())
     }
@@ -78,7 +85,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("incidents.jsonl");
         let sink = IncidentSink::open(&path).await.unwrap();
-        sink.record(&Incident::new("test", 1, "logged")).await.unwrap();
+        sink.record(&Incident::new("test", 1, "logged"))
+            .await
+            .unwrap();
         let data = fs::read_to_string(path).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
         assert_eq!(parsed["kind"], "test");

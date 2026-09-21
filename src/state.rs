@@ -93,10 +93,12 @@ impl SecurityState {
         let mut decision = MessageDecision::default();
         let mut state = lock(&self.message);
         state.events = state.events.wrapping_add(1);
-        if state.events.is_multiple_of(512) {
+        if state.events % 512 == 0 {
             let retention = self.retention;
             state.users.retain(|_, activity| {
-                activity.last_seen.is_some_and(|seen| now.saturating_duration_since(seen) <= retention)
+                activity
+                    .last_seen
+                    .is_some_and(|seen| now.saturating_duration_since(seen) <= retention)
             });
         }
 
@@ -106,11 +108,15 @@ impl SecurityState {
         if config.mentions.enabled {
             if input.total_mentions > config.mentions.max_total_mentions {
                 decision.violations.push(Violation::MassMention);
-                decision.timeout_seconds = decision.timeout_seconds.max(config.mentions.timeout_seconds);
+                decision.timeout_seconds = decision
+                    .timeout_seconds
+                    .max(config.mentions.timeout_seconds);
             }
             if input.everyone_mentions > config.mentions.max_everyone_mentions {
                 decision.violations.push(Violation::EveryoneMention);
-                decision.timeout_seconds = decision.timeout_seconds.max(config.mentions.timeout_seconds);
+                decision.timeout_seconds = decision
+                    .timeout_seconds
+                    .max(config.mentions.timeout_seconds);
             }
             if input
                 .mentioned_roles
@@ -122,7 +128,9 @@ impl SecurityState {
                 activity.protected_pings.push_back(now);
                 if activity.protected_pings.len() > config.mentions.protected_role_max_pings {
                     decision.violations.push(Violation::ProtectedRolePing);
-                    decision.timeout_seconds = decision.timeout_seconds.max(config.mentions.timeout_seconds);
+                    decision.timeout_seconds = decision
+                        .timeout_seconds
+                        .max(config.mentions.timeout_seconds);
                 }
             }
         }
@@ -133,21 +141,26 @@ impl SecurityState {
             activity.messages.push_back(now);
             if activity.messages.len() > config.spam.max_messages {
                 decision.violations.push(Violation::MessageFlood);
-                decision.timeout_seconds = decision.timeout_seconds.max(config.spam.timeout_seconds);
+                decision.timeout_seconds =
+                    decision.timeout_seconds.max(config.spam.timeout_seconds);
             }
 
             let normalized = input.content.trim().to_lowercase();
             if !normalized.is_empty() {
                 let hash = hash_message(&normalized);
                 let duplicate_window = Duration::from_secs(config.spam.duplicate_window_seconds);
+                activity.duplicates.retain(|_, times| {
+                    prune(times, now, duplicate_window);
+                    !times.is_empty()
+                });
                 let occurrences = activity.duplicates.entry(hash).or_default();
                 prune(occurrences, now, duplicate_window);
                 occurrences.push_back(now);
                 if occurrences.len() > config.spam.max_duplicates {
                     decision.violations.push(Violation::DuplicateSpam);
-                    decision.timeout_seconds = decision.timeout_seconds.max(config.spam.timeout_seconds);
+                    decision.timeout_seconds =
+                        decision.timeout_seconds.max(config.spam.timeout_seconds);
                 }
-                activity.duplicates.retain(|_, times| !times.is_empty());
             }
         }
 
@@ -180,7 +193,11 @@ impl SecurityState {
         }
 
         let mut state = lock(&self.joins);
-        prune(&mut state.joins, now, Duration::from_secs(config.raids.join_window_seconds));
+        prune(
+            &mut state.joins,
+            now,
+            Duration::from_secs(config.raids.join_window_seconds),
+        );
         state.joins.push_back(now);
         let was_active = state.raid_until.is_some_and(|until| until > now);
         let threshold_reached = state.joins.len() >= config.raids.join_threshold;
@@ -202,7 +219,10 @@ impl SecurityState {
 }
 
 fn prune(queue: &mut VecDeque<Instant>, now: Instant, window: Duration) {
-    while queue.front().is_some_and(|time| now.saturating_duration_since(*time) > window) {
+    while queue
+        .front()
+        .is_some_and(|time| now.saturating_duration_since(*time) > window)
+    {
         queue.pop_front();
     }
 }
@@ -214,7 +234,9 @@ fn hash_message(message: &str) -> u64 {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -255,10 +277,20 @@ mod tests {
             everyone_mentions: 0,
             mentioned_roles: &[9],
         };
-        assert!(!state.inspect_message(&input, &config, start).should_delete());
-        assert!(!state.inspect_message(&input, &config, start + Duration::from_secs(1)).should_delete());
+        assert!(
+            !state
+                .inspect_message(&input, &config, start)
+                .should_delete()
+        );
+        assert!(
+            !state
+                .inspect_message(&input, &config, start + Duration::from_secs(1))
+                .should_delete()
+        );
         assert_eq!(
-            state.inspect_message(&input, &config, start + Duration::from_secs(2)).violations,
+            state
+                .inspect_message(&input, &config, start + Duration::from_secs(2))
+                .violations,
             vec![Violation::ProtectedRolePing]
         );
     }
@@ -274,7 +306,11 @@ mod tests {
         let state = SecurityState::new(&config);
         let start = Instant::now();
         for offset in 0..2 {
-            assert!(!state.inspect_join(&config, start + Duration::from_secs(offset), 100_000, 0).raid_active);
+            assert!(
+                !state
+                    .inspect_join(&config, start + Duration::from_secs(offset), 100_000, 0)
+                    .raid_active
+            );
         }
         let result = state.inspect_join(&config, start + Duration::from_secs(2), 100_000, 99_999);
         assert!(result.raid_active);

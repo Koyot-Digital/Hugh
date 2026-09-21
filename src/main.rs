@@ -78,7 +78,10 @@ fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("hugh=info"));
     let json = env::var("HUGH_LOG_FORMAT").is_ok_and(|value| value.eq_ignore_ascii_case("json"));
     if json {
-        tracing_subscriber::fmt().with_env_filter(filter).json().init();
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .init();
     } else {
         tracing_subscriber::fmt().with_env_filter(filter).init();
     }

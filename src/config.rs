@@ -90,7 +90,11 @@ pub struct InviteConfig {
 
 impl Default for InviteConfig {
     fn default() -> Self {
-        Self { enabled: false, allowed_codes: HashSet::new(), timeout_seconds: 300 }
+        Self {
+            enabled: false,
+            allowed_codes: HashSet::new(),
+            timeout_seconds: 300,
+        }
     }
 }
 
@@ -156,13 +160,22 @@ impl Config {
         if self.incident_log_path.trim().is_empty() {
             bail!("incident_log_path must not be empty");
         }
-        positive("mentions.protected_role_max_pings", self.mentions.protected_role_max_pings)?;
-        positive("mentions.protected_role_window_seconds", self.mentions.protected_role_window_seconds)?;
+        positive(
+            "mentions.protected_role_max_pings",
+            self.mentions.protected_role_max_pings,
+        )?;
+        positive(
+            "mentions.protected_role_window_seconds",
+            self.mentions.protected_role_window_seconds,
+        )?;
         positive("mentions.timeout_seconds", self.mentions.timeout_seconds)?;
         positive("spam.max_messages", self.spam.max_messages)?;
         positive("spam.window_seconds", self.spam.window_seconds)?;
         positive("spam.max_duplicates", self.spam.max_duplicates)?;
-        positive("spam.duplicate_window_seconds", self.spam.duplicate_window_seconds)?;
+        positive(
+            "spam.duplicate_window_seconds",
+            self.spam.duplicate_window_seconds,
+        )?;
         positive("spam.timeout_seconds", self.spam.timeout_seconds)?;
         positive("raids.join_threshold", self.raids.join_threshold)?;
         positive("raids.join_window_seconds", self.raids.join_window_seconds)?;
@@ -183,7 +196,9 @@ impl Config {
     #[must_use]
     pub fn is_trusted(&self, user_id: u64, roles: impl IntoIterator<Item = u64>) -> bool {
         self.trusted_user_ids.contains(&user_id)
-            || roles.into_iter().any(|role| self.trusted_role_ids.contains(&role))
+            || roles
+                .into_iter()
+                .any(|role| self.trusted_role_ids.contains(&role))
     }
 }
 
@@ -214,7 +229,10 @@ where
     D: serde::Deserializer<'de>,
 {
     let values = Vec::<String>::deserialize(deserializer)?;
-    values.into_iter().map(|value| value.parse().map_err(serde::de::Error::custom)).collect()
+    values
+        .into_iter()
+        .map(|value| value.parse().map_err(serde::de::Error::custom))
+        .collect()
 }
 
 #[cfg(test)]
