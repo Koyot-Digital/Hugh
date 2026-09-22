@@ -161,15 +161,6 @@ async fn lock(
     )
     .await?;
 
-    command
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new().content(format!(
-                "Locked <#{}>. Existing permission settings were preserved.",
-                channel_id.get()
-            )),
-        )
-        .await?;
     let mut incident = Incident::new("channel_lock", config.guild_id, "channel_locked");
     incident.actor_id = Some(command.user.id.get());
     incident.channel_id = Some(channel_id.get());
@@ -184,6 +175,15 @@ async fn lock(
             ),
         )
         .await;
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().content(format!(
+                "Locked <#{}>. Existing permission settings were preserved.",
+                channel_id.get()
+            )),
+        )
+        .await?;
     Ok(())
 }
 
@@ -271,10 +271,6 @@ async fn banish(
             join_ids(&failed)
         )
     };
-    command
-        .edit_response(&ctx.http, EditInteractionResponse::new().content(response))
-        .await?;
-
     let mut incident = Incident::new("member_banish", config.guild_id, action);
     incident.actor_id = Some(command.user.id.get());
     incident.details = BTreeMap::from([
@@ -293,6 +289,9 @@ async fn banish(
             ),
         )
         .await;
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().content(response))
+        .await?;
     Ok(())
 }
 
@@ -368,17 +367,6 @@ async fn unbanish(
     } else {
         format!(" Deleted roles skipped: `{}`.", join_ids(&missing))
     };
-    command
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new().content(format!(
-                "Released <@{}> and restored {} role(s).{missing_note}",
-                user_id.get(),
-                restored.len()
-            )),
-        )
-        .await?;
-
     let mut incident = Incident::new("member_unbanish", config.guild_id, "member_released");
     incident.actor_id = Some(command.user.id.get());
     incident.details = BTreeMap::from([
@@ -397,6 +385,16 @@ async fn unbanish(
             ),
         )
         .await;
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().content(format!(
+                "Released <@{}> and restored {} role(s).{missing_note}",
+                user_id.get(),
+                restored.len()
+            )),
+        )
+        .await?;
     Ok(())
 }
 
