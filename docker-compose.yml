@@ -5,6 +5,7 @@ services:
     init: true
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN in .env}
+      HUGH_INCIDENT_WEBHOOK_URL: ${HUGH_INCIDENT_WEBHOOK_URL:?set HUGH_INCIDENT_WEBHOOK_URL in .env}
       RUST_LOG: ${RUST_LOG:-hugh=info}
       HUGH_LOG_FORMAT: ${HUGH_LOG_FORMAT:-json}
     volumes:

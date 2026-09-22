@@ -3,7 +3,7 @@ guild_id = "123456789012345678"
 incident_log_path = "data/incidents.jsonl"
 
 # Users with these IDs bypass message and role guards. Keep this list short.
-trusted_user_ids = ["123456789012345678"]
+trusted_user_ids = ["123456789012345679"]
 
 # Members with one of these roles bypass message guards. Do not put a general
 # staff role here if you want its members to remain protected from compromise.
@@ -16,7 +16,7 @@ max_everyone_mentions = 0
 timeout_seconds = 600
 
 # The third protected-role ping by one user inside 20 seconds is blocked.
-protected_role_ids = ["123456789012345678"]
+protected_role_ids = ["123456789012345680"]
 protected_role_max_pings = 2
 protected_role_window_seconds = 20
 
@@ -47,11 +47,11 @@ timeout_seconds = 3600
 [role_guard]
 enabled = true
 # Hugh removes these roles from every user not in authorized_member_ids.
-protected_role_ids = ["123456789012345678"]
-authorized_member_ids = ["123456789012345678"]
+protected_role_ids = ["123456789012345680"]
+authorized_member_ids = ["123456789012345679"]
 
 [quarantine]
 enabled = true
-channel_id = "123456789012345678"
-role_id = "123456789012345678"
+channel_id = "123456789012345681"
+role_id = "123456789012345682"
 store_path = "data/quarantine.jsonl"

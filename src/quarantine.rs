@@ -11,8 +11,13 @@ use tokio::{
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum StoreEvent {
-    Snapshot { user_id: String, role_ids: Vec<String> },
-    Cleared { user_id: String },
+    Snapshot {
+        user_id: String,
+        role_ids: Vec<String>,
+    },
+    Cleared {
+        user_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -53,18 +58,13 @@ impl QuarantineStore {
                         )
                     })?;
                     apply_event(&mut records, event).with_context(|| {
-                        format!(
-                            "invalid quarantine IDs at {}:{}",
-                            path.display(),
-                            index + 1
-                        )
+                        format!("invalid quarantine IDs at {}:{}", path.display(), index + 1)
                     })?;
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read {}", path.display()));
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
             }
         }
 
@@ -92,6 +92,7 @@ impl QuarantineStore {
         };
         append(&mut inner.file, &event).await?;
         inner.records.insert(user_id, role_ids);
+        drop(inner);
         Ok(true)
     }
 
@@ -105,9 +106,12 @@ impl QuarantineStore {
         if !inner.records.contains_key(&user_id) {
             return Ok(false);
         }
-        let event = StoreEvent::Cleared { user_id: user_id.to_string() };
+        let event = StoreEvent::Cleared {
+            user_id: user_id.to_string(),
+        };
         append(&mut inner.file, &event).await?;
         inner.records.remove(&user_id);
+        drop(inner);
         Ok(true)
     }
 }

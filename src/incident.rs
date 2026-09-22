@@ -77,9 +77,7 @@ impl IncidentReporter {
             .field("Action", &incident.action, true)
             .colour(Colour::from_rgb(215, 58, 73))
             .timestamp(Timestamp::now());
-        let message = ExecuteWebhook::new()
-            .username("Hugh Security")
-            .embed(embed);
+        let message = ExecuteWebhook::new().username("Hugh Security").embed(embed);
         if let Err(error) = self.webhook.execute(http, false, message).await {
             warn!(?error, "failed to deliver incident webhook");
         }

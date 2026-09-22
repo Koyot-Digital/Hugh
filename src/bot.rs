@@ -2,22 +2,29 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use chrono::Utc;
 use serenity::{
-    all::{ChannelId, Context, EventHandler, GuildId, Member, Message, Ready, RoleId, Timestamp},
+    all::{
+        Context, EventHandler, GuildChannel, GuildId, Interaction, Member, Message, Ready, RoleId,
+        Timestamp,
+    },
     async_trait,
+    builder::CreateMessage,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
+    commands,
     config::{Config, YoungAccountAction},
     detection::unauthorized_protected_roles,
-    incident::{Incident, IncidentSink},
+    incident::{Incident, IncidentReporter},
+    quarantine::QuarantineStore,
     state::{MessageInput, SecurityState},
 };
 
 pub struct Handler {
     config: Arc<Config>,
     state: Arc<SecurityState>,
-    incidents: IncidentSink,
+    incidents: IncidentReporter,
+    quarantine: Option<QuarantineStore>,
 }
 
 impl Handler {
@@ -25,12 +32,14 @@ impl Handler {
     pub const fn new(
         config: Arc<Config>,
         state: Arc<SecurityState>,
-        incidents: IncidentSink,
+        incidents: IncidentReporter,
+        quarantine: Option<QuarantineStore>,
     ) -> Self {
         Self {
             config,
             state,
             incidents,
+            quarantine,
         }
     }
 
@@ -47,7 +56,14 @@ impl Handler {
         let roles: Vec<u64> = message.member.as_ref().map_or_else(Vec::new, |member| {
             member.roles.iter().map(|id| id.get()).collect()
         });
+        let mentions_hugh = message
+            .mentions
+            .iter()
+            .any(|user| user.id == ctx.cache.current_user().id);
         if self.config.is_trusted(message.author.id.get(), roles) {
+            if mentions_hugh {
+                self.send_about(ctx, message.channel_id).await;
+            }
             return;
         }
 
@@ -65,6 +81,9 @@ impl Handler {
             .state
             .inspect_message(&input, &self.config, Instant::now());
         if !decision.should_delete() {
+            if mentions_hugh {
+                self.send_about(ctx, message.channel_id).await;
+            }
             return;
         }
 
@@ -110,16 +129,17 @@ impl Handler {
             ("message_id".into(), message.id.get().into()),
             ("reasons".into(), reasons.clone().into()),
         ]);
-        self.record_and_alert(
-            ctx,
-            incident,
-            format!(
-                "Message guard: user {} in channel {} - {reasons} ({action})",
-                message.author.id.get(),
-                message.channel_id.get()
-            ),
-        )
-        .await;
+        self.incidents
+            .report(
+                &ctx.http,
+                incident,
+                format!(
+                    "Message guard: user {} in channel {} - {reasons} ({action})",
+                    message.author.id.get(),
+                    message.channel_id.get()
+                ),
+            )
+            .await;
     }
 
     async fn handle_join(&self, ctx: &Context, mut member: Member) {
@@ -142,15 +162,16 @@ impl Handler {
             incident
                 .details
                 .insert("joins_in_window".into(), decision.join_count.into());
-            self.record_and_alert(
-                ctx,
-                incident,
-                format!(
-                    "Raid mode activated: {} joins inside the configured window.",
-                    decision.join_count
-                ),
-            )
-            .await;
+            self.incidents
+                .report(
+                    &ctx.http,
+                    incident,
+                    format!(
+                        "Raid mode activated: {} joins inside the configured window.",
+                        decision.join_count
+                    ),
+                )
+                .await;
         }
 
         if !decision.raid_active
@@ -198,16 +219,17 @@ impl Handler {
             "account_age_seconds".into(),
             decision.account_age_seconds.into(),
         );
-        self.record_and_alert(
-            ctx,
-            incident,
-            format!(
-                "Raid guard: user {} is {} seconds old ({final_action}).",
-                member.user.id.get(),
-                decision.account_age_seconds
-            ),
-        )
-        .await;
+        self.incidents
+            .report(
+                &ctx.http,
+                incident,
+                format!(
+                    "Raid guard: user {} is {} seconds old ({final_action}).",
+                    member.user.id.get(),
+                    decision.account_age_seconds
+                ),
+            )
+            .await;
     }
 
     async fn handle_member_update(&self, ctx: &Context, member: Member) {
@@ -217,8 +239,13 @@ impl Handler {
             return;
         }
         let roles = member.roles.iter().map(|role| role.get());
+        let quarantine_role = self.config.quarantine.role_id;
         let unauthorized =
             unauthorized_protected_roles(member.user.id.get(), roles, &self.config.role_guard);
+        let unauthorized: Vec<u64> = unauthorized
+            .into_iter()
+            .filter(|role| Some(*role) != quarantine_role)
+            .collect();
         if unauthorized.is_empty() {
             return;
         }
@@ -253,34 +280,29 @@ impl Handler {
         incident
             .details
             .insert("failed_role_ids".into(), serde_json::json!(failed));
-        self.record_and_alert(
-            ctx,
-            incident,
-            format!(
-                "Role guard: unauthorized protected role(s) found on user {} ({action}).",
-                member.user.id.get()
-            ),
-        )
-        .await;
+        self.incidents
+            .report(
+                &ctx.http,
+                incident,
+                format!(
+                    "Role guard: unauthorized protected role(s) found on user {} ({action}).",
+                    member.user.id.get()
+                ),
+            )
+            .await;
     }
 
-    async fn record_and_alert(&self, ctx: &Context, incident: Incident, alert: String) {
-        info!(kind = incident.kind, action = incident.action, actor_id = ?incident.actor_id, "security incident");
-        if let Err(error) = self.incidents.record(&incident).await {
-            error!(?error, "failed to persist security incident");
-        }
-        if let Err(error) = ChannelId::new(self.config.alert_channel_id)
-            .say(&ctx.http, alert)
-            .await
-        {
-            warn!(?error, "failed to send incident alert");
+    async fn send_about(&self, ctx: &Context, channel_id: serenity::all::ChannelId) {
+        let message = CreateMessage::new().embed(commands::about_embed());
+        if let Err(error) = channel_id.send_message(&ctx.http, message).await {
+            error!(?error, "failed to send Hugh introduction");
         }
     }
 }
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: Ready) {
+    async fn ready(&self, ctx: Context, ready: Ready) {
         let configured_guild = GuildId::new(self.config.guild_id);
         if !ready
             .guilds
@@ -293,6 +315,24 @@ impl EventHandler for Handler {
             );
         }
         info!(user = %ready.user.name, user_id = ready.user.id.get(), "Hugh is connected");
+        if let Err(error) = commands::register(&ctx, &self.config).await {
+            error!(?error, "failed to register slash commands");
+        }
+        if let Err(error) = commands::configure_quarantine(&ctx, &self.config).await {
+            error!(?error, "failed to configure quarantine channel isolation");
+            let incident = Incident::new(
+                "quarantine_configuration",
+                self.config.guild_id,
+                "configuration_failed",
+            );
+            self.incidents
+                .report(
+                    &ctx.http,
+                    incident,
+                    "Hugh could not configure quarantine channel isolation. Check Manage Channels permission and configured IDs.",
+                )
+                .await;
+        }
     }
 
     async fn message(&self, ctx: Context, message: Message) {
@@ -326,6 +366,29 @@ impl EventHandler for Handler {
             }
         };
         self.handle_member_update(&ctx, member).await;
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        commands::handle(
+            &ctx,
+            interaction,
+            &self.config,
+            self.quarantine.as_ref(),
+            &self.incidents,
+        )
+        .await;
+    }
+
+    async fn channel_create(&self, ctx: Context, channel: GuildChannel) {
+        if let Err(error) =
+            commands::configure_quarantine_channel(&ctx, &self.config, &channel).await
+        {
+            error!(
+                ?error,
+                channel_id = channel.id.get(),
+                "failed to isolate new channel from quarantine"
+            );
+        }
     }
 }
 

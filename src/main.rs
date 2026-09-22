@@ -53,8 +53,8 @@ async fn main() -> Result<()> {
         bail!("DISCORD_TOKEN must not be empty");
     }
 
-    let webhook_url = env::var("HUGH_INCIDENT_WEBHOOK_URL")
-        .context("HUGH_INCIDENT_WEBHOOK_URL is not set")?;
+    let webhook_url =
+        env::var("HUGH_INCIDENT_WEBHOOK_URL").context("HUGH_INCIDENT_WEBHOOK_URL is not set")?;
     if webhook_url.trim().is_empty() {
         bail!("HUGH_INCIDENT_WEBHOOK_URL must not be empty");
     }
