@@ -80,9 +80,11 @@ roles removed by bots, and Hugh can remove only roles below its highest role.
 - `store_path`: append-only role recovery journal. Default:
   `data/quarantine.jsonl`.
 
-Hugh denies the quarantine role permission to view every other existing and
-newly created channel. On the quarantine channel, it denies `@everyone` access
-and explicitly allows the quarantine role and Hugh to view and send messages.
+Hugh ensures the quarantine role cannot view every other existing and newly
+created channel. It adds an explicit role deny to accessible channels; channels
+already hidden by an `@everyone` view deny need no redundant overwrite. On the
+quarantine channel, it denies `@everyone` access and explicitly allows the
+quarantine role and Hugh to view and send messages.
 Discord owners and administrators bypass channel overwrites, and managed
 integration roles cannot be removed; account for those exceptions when testing.
 

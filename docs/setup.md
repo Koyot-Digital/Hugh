@@ -46,9 +46,10 @@ must remain above the quarantine role.
 At startup Hugh preserves unrelated overwrites while ensuring `@everyone`
 cannot view the quarantine channel, the quarantine role and Hugh can view it,
 and the quarantine role cannot view any other existing or newly created
-channel. Server owners, administrators, and managed integration roles with an
-explicit channel allow can still bypass this isolation. Verify the result
-before production use.
+channel. Hugh adds an explicit deny to accessible channels and safely keeps an
+existing `@everyone` view deny on channels that are already private. Server
+owners, administrators, and managed integration roles with an explicit channel
+allow can still bypass this isolation. Verify the result before production use.
 
 ## 4. Configure
 

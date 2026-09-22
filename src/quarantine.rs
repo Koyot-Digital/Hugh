@@ -196,6 +196,13 @@ impl QuarantineManager {
             )
             .await?;
         } else {
+            if quarantine_is_already_hidden(
+                &channel.permission_overwrites,
+                config.guild_id,
+                resources.role_id.get(),
+            ) {
+                return Ok(());
+            }
             apply_overwrite(
                 &ctx.http,
                 channel,
@@ -230,6 +237,27 @@ async fn apply_overwrite(
         .create_permission(http, PermissionOverwrite { allow, deny, kind })
         .await?;
     Ok(())
+}
+
+fn quarantine_is_already_hidden(
+    overwrites: &[PermissionOverwrite],
+    guild_id: u64,
+    quarantine_role_id: u64,
+) -> bool {
+    let quarantine = overwrites
+        .iter()
+        .find(|entry| entry.kind == PermissionOverwriteType::Role(RoleId::new(quarantine_role_id)));
+    if quarantine.is_some_and(|entry| entry.allow.view_channel()) {
+        return false;
+    }
+    if quarantine.is_some_and(|entry| entry.deny.view_channel()) {
+        return true;
+    }
+
+    overwrites
+        .iter()
+        .find(|entry| entry.kind == PermissionOverwriteType::Role(RoleId::new(guild_id)))
+        .is_some_and(|entry| entry.deny.view_channel() && !entry.allow.view_channel())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -372,6 +400,33 @@ fn apply_event(records: &mut BTreeMap<u64, Vec<u64>>, event: StoreEvent) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_everyone_overwrite_already_hides_quarantine() {
+        let overwrites = [PermissionOverwrite {
+            allow: Permissions::empty(),
+            deny: Permissions::VIEW_CHANNEL,
+            kind: PermissionOverwriteType::Role(RoleId::new(1)),
+        }];
+        assert!(quarantine_is_already_hidden(&overwrites, 1, 2));
+    }
+
+    #[test]
+    fn quarantine_allow_must_be_repaired_even_when_everyone_is_denied() {
+        let overwrites = [
+            PermissionOverwrite {
+                allow: Permissions::empty(),
+                deny: Permissions::VIEW_CHANNEL,
+                kind: PermissionOverwriteType::Role(RoleId::new(1)),
+            },
+            PermissionOverwrite {
+                allow: Permissions::VIEW_CHANNEL,
+                deny: Permissions::empty(),
+                kind: PermissionOverwriteType::Role(RoleId::new(2)),
+            },
+        ];
+        assert!(!quarantine_is_already_hidden(&overwrites, 1, 2));
+    }
 
     #[tokio::test]
     async fn snapshots_survive_restart_and_are_not_overwritten() {
