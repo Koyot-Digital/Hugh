@@ -21,7 +21,7 @@ JSONL incident log.
 
 ## Quick start
 
-1. Install stable Rust (1.85 or newer) and create a Discord application/bot.
+1. Install stable Rust (1.97 or newer) and create a Discord application/bot.
 2. Copy `config.example.toml` to `config.toml` and fill in the server, channel,
    and role IDs.
 3. Create a private incident webhook, then enable the **Server Members Intent**
