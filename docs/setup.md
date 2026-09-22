@@ -14,7 +14,8 @@ URL can post through the webhook.
 
 ## 2. Invite Hugh
 
-In **OAuth2 > URL Generator**, select the `bot` scope and these bot permissions:
+In **OAuth2 > URL Generator**, select the `bot` and `applications.commands`
+scopes and these bot permissions:
 
 - View Channels
 - Send Messages
@@ -22,7 +23,7 @@ In **OAuth2 > URL Generator**, select the `bot` scope and these bot permissions:
 - Manage Messages
 - Moderate Members
 - Kick Members only if `young_account_action = "kick"`
-- Manage Roles only if the role guard is enabled
+- Manage Roles if the role guard or quarantine is enabled
 - Manage Channels for `/lock` and quarantine isolation
 
 Hugh does not require Administrator. Granting it is strongly discouraged.

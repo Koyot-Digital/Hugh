@@ -102,7 +102,8 @@ pub async fn handle(
     };
     if let Err(error) = result {
         error!(?error, command = command.data.name, "slash command failed");
-        let message = format!("Hugh could not complete that command: {error}");
+        let error_message = error.to_string();
+        let message = format!("Hugh could not complete that command: {error_message}");
         if command.get_response(&ctx.http).await.is_ok() {
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().content(message))
@@ -110,6 +111,24 @@ pub async fn handle(
         } else {
             let _ = respond_text(ctx, &command, message, true).await;
         }
+        let mut incident = Incident::new("command_failure", config.guild_id, "command_failed");
+        incident.actor_id = Some(command.user.id.get());
+        incident.channel_id = Some(command.channel_id.get());
+        incident.details.insert(
+            "command".into(),
+            serde_json::Value::String(command.data.name.clone()),
+        );
+        incidents
+            .report(
+                &ctx.http,
+                incident,
+                format!(
+                    "Command /{} by user {} failed: {error_message}",
+                    command.data.name,
+                    command.user.id.get()
+                ),
+            )
+            .await;
     }
 }
 
@@ -425,7 +444,11 @@ pub async fn configure_quarantine(ctx: &Context, config: &Config) -> Result<()> 
             .role_id
             .context("quarantine role is not configured")?,
     );
-    if !guild_id.roles(&ctx.http).await?.contains_key(&quarantine_role) {
+    if !guild_id
+        .roles(&ctx.http)
+        .await?
+        .contains_key(&quarantine_role)
+    {
         bail!("the configured quarantine role does not exist in this server");
     }
     for channel in channels.values() {
@@ -508,16 +531,24 @@ async fn apply_overwrite(
         .permission_overwrites
         .iter()
         .find(|entry| entry.kind == kind);
+    let overwrite = merged_overwrite(existing, kind, add_allow, add_deny);
+    channel.create_permission(http, overwrite).await?;
+    Ok(())
+}
+
+fn merged_overwrite(
+    existing: Option<&PermissionOverwrite>,
+    kind: PermissionOverwriteType,
+    add_allow: Permissions,
+    add_deny: Permissions,
+) -> PermissionOverwrite {
     let mut allow = existing.map_or(Permissions::empty(), |entry| entry.allow);
     let mut deny = existing.map_or(Permissions::empty(), |entry| entry.deny);
     allow.remove(add_deny);
     deny.remove(add_allow);
     allow.insert(add_allow);
     deny.insert(add_deny);
-    channel
-        .create_permission(http, PermissionOverwrite { allow, deny, kind })
-        .await?;
-    Ok(())
+    PermissionOverwrite { allow, deny, kind }
 }
 
 fn require_permissions(
@@ -615,4 +646,32 @@ fn join_ids(ids: &[u64]) -> String {
         .map(u64::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merging_overwrite_preserves_unrelated_permissions() {
+        let kind = PermissionOverwriteType::Role(RoleId::new(7));
+        let existing = PermissionOverwrite {
+            allow: Permissions::ATTACH_FILES | Permissions::SEND_MESSAGES,
+            deny: Permissions::MANAGE_MESSAGES,
+            kind,
+        };
+        let merged = merged_overwrite(
+            Some(&existing),
+            kind,
+            Permissions::VIEW_CHANNEL,
+            Permissions::SEND_MESSAGES,
+        );
+
+        assert!(merged.allow.attach_files());
+        assert!(merged.allow.view_channel());
+        assert!(!merged.allow.send_messages());
+        assert!(merged.deny.manage_messages());
+        assert!(merged.deny.send_messages());
+        assert!(!merged.deny.view_channel());
+    }
 }

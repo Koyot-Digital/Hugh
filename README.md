@@ -16,7 +16,8 @@ The current core protects against:
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
 exempted, all enforcement is limited to one guild, and significant actions are
-written to both structured logs and an append-only JSONL incident log.
+delivered by webhook and written to both structured logs and an append-only
+JSONL incident log.
 
 ## Quick start
 
