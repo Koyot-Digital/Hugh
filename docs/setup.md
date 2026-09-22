@@ -8,17 +8,22 @@
    not used and should remain disabled.
 4. Never paste the token into `config.toml`, a commit, an issue, or a log.
 
+Create a webhook in a private staff incident channel under **Edit Channel >
+Integrations > Webhooks**. Protect its URL like the bot token: anyone with that
+URL can post through the webhook.
+
 ## 2. Invite Hugh
 
 In **OAuth2 > URL Generator**, select the `bot` scope and these bot permissions:
 
 - View Channels
-- Send Messages (for the alert channel)
+- Send Messages
 - Read Message History
 - Manage Messages
 - Moderate Members
 - Kick Members only if `young_account_action = "kick"`
 - Manage Roles only if the role guard is enabled
+- Manage Channels for `/lock` and quarantine isolation
 
 Hugh does not require Administrator. Granting it is strongly discouraged.
 
@@ -26,11 +31,23 @@ Place Hugh's Discord role above every member it may time out or kick and above
 every role it must remove. Discord's role hierarchy applies even if the matching
 permission is present.
 
-Restrict the configured alert channel so only Hugh and appropriate staff can
-view it. The channel receives user, channel, role, and message IDs associated
-with incidents.
+Restrict the webhook's incident channel so only appropriate staff can view it.
+Reports include user, channel, role, and message IDs. A local JSONL copy remains
+available if webhook delivery fails.
 
-## 3. Configure
+## 3. Create quarantine resources
+
+Create an empty role named `Quarantined` and a text channel such as
+`#quarantine`. Do not manually give the role server permissions. Put Hugh's role
+above it, then copy both IDs into `[quarantine]`.
+
+At startup Hugh preserves existing overwrites while ensuring `@everyone`
+cannot view the quarantine channel, the quarantine role and Hugh can view it,
+and the quarantine role cannot view other channels. Server owners,
+administrators, and roles with explicit channel-level allows may still bypass
+Discord permission overwrites. Verify the result before production use.
+
+## 4. Configure
 
 Enable Developer Mode under Discord **User Settings > Advanced**. You can then
 right-click servers, channels, roles, and users to copy their IDs.
@@ -48,12 +65,13 @@ cargo run -- --config config.toml --check-config
 Start with raid action `log`, watch normal traffic, and tune thresholds before
 enabling `timeout` or `kick`.
 
-## 4. Run
+## 5. Run
 
 Linux/macOS:
 
 ```text
 export DISCORD_TOKEN='replace-me'
+export HUGH_INCIDENT_WEBHOOK_URL='https://discord.com/api/webhooks/...'
 cargo run --release -- --config config.toml
 ```
 
@@ -61,6 +79,7 @@ PowerShell:
 
 ```powershell
 $env:DISCORD_TOKEN = 'replace-me'
+$env:HUGH_INCIDENT_WEBHOOK_URL = 'https://discord.com/api/webhooks/...'
 cargo run --release -- --config config.toml
 ```
 
@@ -74,6 +93,7 @@ Create `.env` (ignored by Git):
 
 ```text
 DISCORD_TOKEN=replace-me
+HUGH_INCIDENT_WEBHOOK_URL=https://discord.com/api/webhooks/replace-me
 ```
 
 Then run:
@@ -83,8 +103,8 @@ docker compose up -d --build
 docker compose logs -f hugh
 ```
 
-The compose file mounts `config.toml` read-only and stores incident logs in the
-named `hugh-data` volume.
+The compose file mounts `config.toml` read-only and stores incident and
+quarantine recovery logs in the named `hugh-data` volume.
 
 ## Updating
 

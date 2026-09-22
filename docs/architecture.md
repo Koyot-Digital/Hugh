@@ -15,7 +15,9 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
 - `detection.rs` contains pure, side-effect-free content and role checks.
 - `state.rs` owns rolling windows and turns observations into decisions.
 - `bot.rs` adapts Serenity events and performs Discord API actions.
-- `incident.rs` appends privacy-minimal, machine-readable incident records.
+- `commands.rs` registers and authorizes slash commands and enforces quarantine.
+- `quarantine.rs` maintains an append-only role recovery journal.
+- `incident.rs` writes machine-readable records and delivers webhook reports.
 
 Detector code does not call Discord. This keeps threshold behavior cheap to
 test and lets future frontends reuse the same policy. Discord API failures never
@@ -43,6 +45,6 @@ instances against the same guild is unsupported.
 
 Message processing is linear in the small number of active timestamps for that
 user. Old entries are pruned and inactive users are periodically evicted.
-Duplicate message bodies are hashed and discarded. Disk and Discord I/O only
-happen after a violation. The JSONL sink is serialized to preserve complete
-lines.
+Duplicate message bodies are hashed and discarded. Disk and Discord I/O happen
+only after a violation or moderator command. JSONL writes are serialized and
+flushed before security state is considered durable.

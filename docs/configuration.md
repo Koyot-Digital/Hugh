@@ -10,7 +10,6 @@ integer value.
 | Key | Meaning |
 | --- | --- |
 | `guild_id` | The only server Hugh accepts events from. |
-| `alert_channel_id` | Private staff channel for concise incident notices. |
 | `incident_log_path` | Append-only JSONL audit file. Default: `data/incidents.jsonl`. |
 | `trusted_user_ids` | Users that bypass message guards and raid enforcement. |
 | `trusted_role_ids` | Roles that bypass message guards. Use very sparingly. |
@@ -71,14 +70,44 @@ have missed while offline.
 List every legitimate holder before enabling it. The server owner cannot have
 roles removed by bots, and Hugh can remove only roles below its highest role.
 
+## `[quarantine]`
+
+- `enabled`: enables `/banish`, `/unbanish`, and channel isolation.
+- `channel_id`: private quarantine text channel.
+- `role_id`: otherwise empty role assigned to quarantined members.
+- `store_path`: append-only role recovery journal. Default:
+  `data/quarantine.jsonl`.
+
+The quarantine role must not appear in `trusted_role_ids` or the role guard's
+`protected_role_ids`. A member's original roles are flushed to disk before any
+Discord roles are changed. A repeated `/banish` cannot overwrite that snapshot,
+and `/unbanish` clears it only after restoration and release succeed.
+
+Discord-managed integration roles cannot be removed or manually restored by a
+bot. Hugh leaves them untouched. Deleted roles are reported and skipped during
+restoration.
+
 ## Environment
 
 | Variable | Purpose |
 | --- | --- |
 | `DISCORD_TOKEN` | Required bot token. |
+| `HUGH_INCIDENT_WEBHOOK_URL` | Required private Discord webhook URL for incidents. |
 | `HUGH_CONFIG` | Config path; overridden by `--config`. |
 | `RUST_LOG` | Log filter, such as `hugh=debug,serenity=warn`. |
 | `HUGH_LOG_FORMAT` | Set to `json` for structured process logs. |
 
 Discord permits member timeouts up to 28 days; Hugh clamps values at that API
 limit.
+
+## Slash commands
+
+Hugh registers commands in the configured guild at startup. `/lock`, `/banish`,
+and `/unbanish` have Discord permission defaults and repeat authorization
+checks inside Hugh. Members in `trusted_user_ids` may also use them.
+
+`/lock` preserves the channel's existing `@everyone` overwrite and adds denies
+for sending, creating threads, and reacting. This release intentionally does
+not provide `/unlock`: safely restoring an exact pre-lock state requires a
+separate durable channel snapshot. An administrator can reverse those specific
+deny settings in Discord's channel permission editor.

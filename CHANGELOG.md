@@ -5,6 +5,13 @@ Versioning and the Keep a Changelog format.
 
 ## [Unreleased]
 
+### Added
+
+- Webhook incident delivery with a local JSONL fallback.
+- `/lock`, `/banish`, `/unbanish`, `/help`, and `/hugh` guild commands.
+- Durable quarantine role snapshots and automatic channel isolation.
+- A project introduction when Hugh is mentioned.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added

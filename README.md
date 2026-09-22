@@ -9,8 +9,10 @@ The current core protects against:
 - mass user, role, `@everyone`, and `@here` mentions;
 - repeated pings of protected staff roles;
 - message floods and repeated-message spam;
-- unapproved Discord invite links; and
-- self-elevation into protected roles.
+- unapproved Discord invite links;
+- self-elevation into protected roles;
+- reversible member quarantine with durable role snapshots; and
+- moderator-operated channel lockdowns.
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
 exempted, all enforcement is limited to one guild, and significant actions are
@@ -21,10 +23,10 @@ written to both structured logs and an append-only JSONL incident log.
 1. Install stable Rust (1.85 or newer) and create a Discord application/bot.
 2. Copy `config.example.toml` to `config.toml` and fill in the server, channel,
    and role IDs.
-3. Enable the **Server Members Intent** and **Message Content Intent** in the
-   Discord Developer Portal.
+3. Create a private incident webhook, then enable the **Server Members Intent**
+   and **Message Content Intent** in the Discord Developer Portal.
 4. Invite Hugh with the permissions listed in [the setup guide](docs/setup.md).
-5. Set `DISCORD_TOKEN` and start the bot:
+5. Set `DISCORD_TOKEN` and `HUGH_INCIDENT_WEBHOOK_URL`, then start the bot:
 
    ```text
    cargo run --release -- --config config.toml
@@ -37,7 +39,17 @@ cargo run -- --config config.toml --check-config
 ```
 
 Docker users can instead run `docker compose up -d --build` after creating the
-same config file and a `.env` containing `DISCORD_TOKEN=...`.
+same config file and a `.env` containing both required secrets.
+
+## Commands
+
+- `/lock [channel]` locks the selected or current channel.
+- `/banish user` stores the member's roles and moves them into quarantine.
+- `/unbanish user` restores the stored roles and releases the member.
+- `/help` shows the in-Discord guide.
+- `/hugh` introduces the project and links to this repository.
+
+Mentioning Hugh also shows the short project introduction.
 
 ## Documentation
 
