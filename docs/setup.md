@@ -90,12 +90,13 @@ cleanly.
 
 ## Docker
 
-Create `.env` (ignored by Git):
+Copy the environment template, then edit `.env` (ignored by Git):
 
 ```text
-DISCORD_TOKEN=replace-me
-HUGH_INCIDENT_WEBHOOK_URL=https://discord.com/api/webhooks/replace-me
+cp .env.example .env
 ```
+
+Replace both placeholder secrets in `.env` before starting Hugh.
 
 Then run:
 

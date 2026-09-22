@@ -39,8 +39,9 @@ Validate configuration without connecting to Discord:
 cargo run -- --config config.toml --check-config
 ```
 
-Docker users can instead run `docker compose up -d --build` after creating the
-same config file and a `.env` containing both required secrets.
+Docker users can instead copy `.env.example` to `.env`, fill in both required
+secrets, and run `docker compose up -d --build` after creating the same config
+file.
 
 ## Commands
 
