@@ -36,17 +36,19 @@ Restrict the webhook's incident channel so only appropriate staff can view it.
 Reports include user, channel, role, and message IDs. A local JSONL copy remains
 available if webhook delivery fails.
 
-## 3. Create quarantine resources
+## 3. Quarantine resources
 
-Create an empty role named `Quarantined` and a text channel such as
-`#quarantine`. Do not manually give the role server permissions. Put Hugh's role
-above it, then copy both IDs into `[quarantine]`.
+With quarantine enabled, Hugh creates or reuses an empty `Quarantined` role and
+the `#quarantine` text channel when it connects. The names are configurable.
+Hugh must have **Manage Roles** and **Manage Channels**, and its Discord role
+must remain above the quarantine role.
 
-At startup Hugh preserves existing overwrites while ensuring `@everyone`
+At startup Hugh preserves unrelated overwrites while ensuring `@everyone`
 cannot view the quarantine channel, the quarantine role and Hugh can view it,
-and the quarantine role cannot view other channels. Server owners,
-administrators, and roles with explicit channel-level allows may still bypass
-Discord permission overwrites. Verify the result before production use.
+and the quarantine role cannot view any other existing or newly created
+channel. Server owners, administrators, and managed integration roles with an
+explicit channel allow can still bypass this isolation. Verify the result
+before production use.
 
 ## 4. Configure
 
@@ -57,7 +59,8 @@ right-click servers, channels, roles, and users to copy their IDs.
 cp config.example.toml config.toml
 ```
 
-Edit every placeholder ID, then validate the file:
+Edit every placeholder ID, then validate the file. Quarantine channel and role
+IDs are optional; omit both for automatic provisioning:
 
 ```text
 cargo run -- --config config.toml --check-config

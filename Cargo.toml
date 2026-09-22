@@ -2,7 +2,7 @@
 name = "hugh"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.97"
 description = "A fast, single-server Discord anti-raid and moderation bot"
 license = "MIT"
 repository = "https://github.com/Koyot-Digital/Hugh"

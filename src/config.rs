@@ -150,6 +150,8 @@ pub struct QuarantineConfig {
     pub channel_id: Option<u64>,
     #[serde(deserialize_with = "optional_snowflake")]
     pub role_id: Option<u64>,
+    pub channel_name: String,
+    pub role_name: String,
     pub store_path: String,
 }
 
@@ -159,6 +161,8 @@ impl Default for QuarantineConfig {
             enabled: false,
             channel_id: None,
             role_id: None,
+            channel_name: "quarantine".to_owned(),
+            role_name: "Quarantined".to_owned(),
             store_path: "data/quarantine.jsonl".to_owned(),
         }
     }
@@ -213,8 +217,19 @@ impl Config {
             bail!("mentions.max_total_mentions must be positive");
         }
         if self.quarantine.enabled {
-            if self.quarantine.channel_id.is_none() || self.quarantine.role_id.is_none() {
-                bail!("quarantine.channel_id and quarantine.role_id are required when enabled");
+            if self.quarantine.channel_id.is_some() != self.quarantine.role_id.is_some() {
+                bail!(
+                    "quarantine.channel_id and quarantine.role_id must either both be set or both be omitted"
+                );
+            }
+            if self.quarantine.channel_name.trim().len() < 2
+                || self.quarantine.channel_name.len() > 100
+            {
+                bail!("quarantine.channel_name must contain 2 to 100 characters");
+            }
+            if self.quarantine.role_name.trim().is_empty() || self.quarantine.role_name.len() > 100
+            {
+                bail!("quarantine.role_name must contain 1 to 100 characters");
             }
             if self.quarantine.store_path.trim().is_empty() {
                 bail!("quarantine.store_path must not be empty");
@@ -303,5 +318,34 @@ trusted_role_ids = ["99"]"#,
         config.role_guard.enabled = false;
         assert!(config.is_trusted(3, [12, 99]));
         assert!(!config.is_trusted(3, [12]));
+    }
+
+    #[test]
+    fn quarantine_can_auto_provision_without_ids() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[quarantine]
+enabled = true"#,
+        )
+        .unwrap();
+        config.role_guard.enabled = false;
+        assert!(config.validate().is_ok());
+        assert_eq!(config.quarantine.channel_name, "quarantine");
+        assert_eq!(config.quarantine.role_name, "Quarantined");
+    }
+
+    #[test]
+    fn quarantine_rejects_only_one_pinned_id() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[quarantine]
+enabled = true
+role_id = "2""#,
+        )
+        .unwrap();
+        config.role_guard.enabled = false;
+        assert!(config.validate().is_err());
     }
 }

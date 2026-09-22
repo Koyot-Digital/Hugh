@@ -73,10 +73,18 @@ roles removed by bots, and Hugh can remove only roles below its highest role.
 ## `[quarantine]`
 
 - `enabled`: enables `/banish`, `/unbanish`, and channel isolation.
-- `channel_id`: private quarantine text channel.
-- `role_id`: otherwise empty role assigned to quarantined members.
+- `channel_name` and `role_name`: exact names Hugh creates or reuses when it
+  connects. Defaults: `quarantine` and `Quarantined`.
+- `channel_id` and `role_id`: optional advanced overrides for existing
+  resources. Set both or neither.
 - `store_path`: append-only role recovery journal. Default:
   `data/quarantine.jsonl`.
+
+Hugh denies the quarantine role permission to view every other existing and
+newly created channel. On the quarantine channel, it denies `@everyone` access
+and explicitly allows the quarantine role and Hugh to view and send messages.
+Discord owners and administrators bypass channel overwrites, and managed
+integration roles cannot be removed; account for those exceptions when testing.
 
 The quarantine role must not appear in `trusted_role_ids` or the role guard's
 `protected_role_ids`. A member's original roles are flushed to disk before any

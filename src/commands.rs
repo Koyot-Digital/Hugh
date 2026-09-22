@@ -17,7 +17,7 @@ use tracing::{error, info};
 use crate::{
     config::Config,
     incident::{Incident, IncidentReporter},
-    quarantine::QuarantineStore,
+    quarantine::{QuarantineManager, QuarantineStore},
 };
 
 pub const REPOSITORY_URL: &str = "https://github.com/Koyot-Digital/Hugh";
@@ -80,6 +80,7 @@ pub async fn handle(
     interaction: Interaction,
     config: &Config,
     store: Option<&QuarantineStore>,
+    resources: &QuarantineManager,
     incidents: &IncidentReporter,
 ) {
     let Interaction::Command(command) = interaction else {
@@ -94,8 +95,8 @@ pub async fn handle(
 
     let result = match command.data.name.as_str() {
         "lock" => lock(ctx, &command, config, incidents).await,
-        "banish" => banish(ctx, &command, config, store, incidents).await,
-        "unbanish" => unbanish(ctx, &command, config, store, incidents).await,
+        "banish" => banish(ctx, &command, config, store, resources, incidents).await,
+        "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
         "help" => help(ctx, &command).await,
         "hugh" => about(ctx, &command).await,
         _ => Ok(()),
@@ -192,6 +193,7 @@ async fn banish(
     command: &CommandInteraction,
     config: &Config,
     store: Option<&QuarantineStore>,
+    resources: &QuarantineManager,
     incidents: &IncidentReporter,
 ) -> Result<()> {
     require_permissions(
@@ -210,7 +212,10 @@ async fn banish(
     if user_id == guild.owner_id {
         bail!("Discord does not allow a bot to quarantine the server owner");
     }
-    configure_quarantine(ctx, config).await?;
+    let resources = resources
+        .provision(ctx, config)
+        .await?
+        .context("quarantine is disabled")?;
 
     let member = guild_id.member(&ctx.http, user_id).await?;
     let original_roles: Vec<u64> = member.roles.iter().map(|role| role.get()).collect();
@@ -221,12 +226,7 @@ async fn banish(
         bail!("that member already has a stored quarantine snapshot");
     }
 
-    let quarantine_role = RoleId::new(
-        config
-            .quarantine
-            .role_id
-            .context("quarantine role is not configured")?,
-    );
+    let quarantine_role = resources.role_id;
     if let Err(error) = member.add_role(&ctx.http, quarantine_role).await {
         // No roles were removed, so it is safe to discard the unused snapshot.
         store.clear(user_id.get()).await?;
@@ -300,6 +300,7 @@ async fn unbanish(
     command: &CommandInteraction,
     config: &Config,
     store: Option<&QuarantineStore>,
+    resources: &QuarantineManager,
     incidents: &IncidentReporter,
 ) -> Result<()> {
     require_permissions(
@@ -317,12 +318,11 @@ async fn unbanish(
         .context("no stored quarantine snapshot exists for that member")?;
     let member = guild_id.member(&ctx.http, user_id).await?;
     let roles = guild_id.roles(&ctx.http).await?;
-    let quarantine_role = RoleId::new(
-        config
-            .quarantine
-            .role_id
-            .context("quarantine role is not configured")?,
-    );
+    let quarantine_role = resources
+        .provision(ctx, config)
+        .await?
+        .context("quarantine is disabled")?
+        .role_id;
 
     let mut restored = Vec::new();
     let mut missing = Vec::new();
@@ -419,103 +419,6 @@ pub fn about_embed() -> CreateEmbed {
         .description("I'm this community's open-source security bot. I watch for raids, abusive mentions, spam, unsafe invites, and unauthorized role elevation.")
         .field("Help build Hugh", format!("Contributions are welcome: {REPOSITORY_URL}"), false)
         .colour(0x0058_65F2)
-}
-
-pub async fn configure_quarantine(ctx: &Context, config: &Config) -> Result<()> {
-    if !config.quarantine.enabled {
-        return Ok(());
-    }
-    let guild_id = GuildId::new(config.guild_id);
-    let channels = guild_id.channels(&ctx.http).await?;
-    let quarantine_channel = ChannelId::new(
-        config
-            .quarantine
-            .channel_id
-            .context("quarantine channel is not configured")?,
-    );
-    if !channels.contains_key(&quarantine_channel) {
-        bail!("the configured quarantine channel does not exist in this server");
-    }
-    let quarantine_role = RoleId::new(
-        config
-            .quarantine
-            .role_id
-            .context("quarantine role is not configured")?,
-    );
-    if !guild_id
-        .roles(&ctx.http)
-        .await?
-        .contains_key(&quarantine_role)
-    {
-        bail!("the configured quarantine role does not exist in this server");
-    }
-    for channel in channels.values() {
-        configure_quarantine_channel(ctx, config, channel).await?;
-    }
-    Ok(())
-}
-
-pub async fn configure_quarantine_channel(
-    ctx: &Context,
-    config: &Config,
-    channel: &GuildChannel,
-) -> Result<()> {
-    if !config.quarantine.enabled || channel.guild_id.get() != config.guild_id {
-        return Ok(());
-    }
-    let quarantine_channel = ChannelId::new(
-        config
-            .quarantine
-            .channel_id
-            .context("quarantine channel is not configured")?,
-    );
-    let quarantine_role = RoleId::new(
-        config
-            .quarantine
-            .role_id
-            .context("quarantine role is not configured")?,
-    );
-
-    if channel.id == quarantine_channel {
-        let bot_user_id = ctx.cache.current_user().id;
-        apply_overwrite(
-            &ctx.http,
-            channel,
-            PermissionOverwriteType::Role(RoleId::new(config.guild_id)),
-            Permissions::empty(),
-            Permissions::VIEW_CHANNEL,
-        )
-        .await?;
-        let access = Permissions::VIEW_CHANNEL
-            | Permissions::SEND_MESSAGES
-            | Permissions::READ_MESSAGE_HISTORY;
-        apply_overwrite(
-            &ctx.http,
-            channel,
-            PermissionOverwriteType::Role(quarantine_role),
-            access,
-            Permissions::empty(),
-        )
-        .await?;
-        apply_overwrite(
-            &ctx.http,
-            channel,
-            PermissionOverwriteType::Member(bot_user_id),
-            access,
-            Permissions::empty(),
-        )
-        .await?;
-    } else {
-        apply_overwrite(
-            &ctx.http,
-            channel,
-            PermissionOverwriteType::Role(quarantine_role),
-            Permissions::empty(),
-            Permissions::VIEW_CHANNEL,
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 async fn apply_overwrite(

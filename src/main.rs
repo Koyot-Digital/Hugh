@@ -21,7 +21,7 @@ use crate::{
     bot::Handler,
     config::Config,
     incident::{IncidentReporter, IncidentSink},
-    quarantine::QuarantineStore,
+    quarantine::{QuarantineManager, QuarantineStore},
     state::SecurityState,
 };
 
@@ -78,6 +78,7 @@ async fn main() -> Result<()> {
         Arc::new(SecurityState::new(&config)),
         incidents,
         quarantine,
+        QuarantineManager::new(),
     );
 
     let intents = GatewayIntents::GUILDS

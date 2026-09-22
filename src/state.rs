@@ -27,7 +27,7 @@ pub struct MessageDecision {
 
 impl MessageDecision {
     #[must_use]
-    pub fn should_delete(&self) -> bool {
+    pub const fn should_delete(&self) -> bool {
         !self.violations.is_empty()
     }
 }
@@ -93,7 +93,7 @@ impl SecurityState {
         let mut decision = MessageDecision::default();
         let mut state = lock(&self.message);
         state.events = state.events.wrapping_add(1);
-        if state.events % 512 == 0 {
+        if state.events.is_multiple_of(512) {
             let retention = self.retention;
             state.users.retain(|_, activity| {
                 activity

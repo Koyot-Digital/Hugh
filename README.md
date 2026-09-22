@@ -11,7 +11,8 @@ The current core protects against:
 - message floods and repeated-message spam;
 - unapproved Discord invite links;
 - self-elevation into protected roles;
-- reversible member quarantine with durable role snapshots; and
+- reversible member quarantine with durable role snapshots;
+- automatic quarantine role/channel provisioning and server-wide isolation;
 - moderator-operated channel lockdowns.
 
 Every threshold is configured in one TOML file. Trusted users and roles can be

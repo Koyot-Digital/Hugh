@@ -52,6 +52,8 @@ authorized_member_ids = ["123456789012345679"]
 
 [quarantine]
 enabled = true
-channel_id = "123456789012345681"
-role_id = "123456789012345682"
+# Hugh creates or reuses resources with these exact names. Advanced deployments
+# may instead set both channel_id and role_id to pin existing resources.
+channel_name = "quarantine"
+role_name = "Quarantined"
 store_path = "data/quarantine.jsonl"

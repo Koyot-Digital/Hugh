@@ -16,7 +16,7 @@ use crate::{
     config::{Config, YoungAccountAction},
     detection::unauthorized_protected_roles,
     incident::{Incident, IncidentReporter},
-    quarantine::QuarantineStore,
+    quarantine::{QuarantineManager, QuarantineStore},
     state::{MessageInput, SecurityState},
 };
 
@@ -25,6 +25,7 @@ pub struct Handler {
     state: Arc<SecurityState>,
     incidents: IncidentReporter,
     quarantine: Option<QuarantineStore>,
+    quarantine_resources: QuarantineManager,
 }
 
 impl Handler {
@@ -34,12 +35,14 @@ impl Handler {
         state: Arc<SecurityState>,
         incidents: IncidentReporter,
         quarantine: Option<QuarantineStore>,
+        quarantine_resources: QuarantineManager,
     ) -> Self {
         Self {
             config,
             state,
             incidents,
             quarantine,
+            quarantine_resources,
         }
     }
 
@@ -239,7 +242,12 @@ impl Handler {
             return;
         }
         let roles = member.roles.iter().map(|role| role.get());
-        let quarantine_role = self.config.quarantine.role_id;
+        let quarantine_role = self
+            .quarantine_resources
+            .current()
+            .await
+            .map(|resources| resources.role_id.get())
+            .or(self.config.quarantine.role_id);
         let unauthorized =
             unauthorized_protected_roles(member.user.id.get(), roles, &self.config.role_guard);
         let unauthorized: Vec<u64> = unauthorized
@@ -318,7 +326,11 @@ impl EventHandler for Handler {
         if let Err(error) = commands::register(&ctx, &self.config).await {
             error!(?error, "failed to register slash commands");
         }
-        if let Err(error) = commands::configure_quarantine(&ctx, &self.config).await {
+        if let Err(error) = self
+            .quarantine_resources
+            .provision(&ctx, &self.config)
+            .await
+        {
             error!(?error, "failed to configure quarantine channel isolation");
             let incident = Incident::new(
                 "quarantine_configuration",
@@ -329,7 +341,7 @@ impl EventHandler for Handler {
                 .report(
                     &ctx.http,
                     incident,
-                    "Hugh could not configure quarantine channel isolation. Check Manage Channels permission and configured IDs.",
+                    "Hugh could not provision quarantine isolation. Check Manage Roles, Manage Channels, role hierarchy, and any pinned resource IDs.",
                 )
                 .await;
         }
@@ -374,14 +386,17 @@ impl EventHandler for Handler {
             interaction,
             &self.config,
             self.quarantine.as_ref(),
+            &self.quarantine_resources,
             &self.incidents,
         )
         .await;
     }
 
     async fn channel_create(&self, ctx: Context, channel: GuildChannel) {
-        if let Err(error) =
-            commands::configure_quarantine_channel(&ctx, &self.config, &channel).await
+        if let Err(error) = self
+            .quarantine_resources
+            .configure_channel(&ctx, &self.config, &channel)
+            .await
         {
             error!(
                 ?error,
