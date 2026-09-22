@@ -171,11 +171,11 @@ impl QuarantineManager {
             let access = Permissions::VIEW_CHANNEL
                 | Permissions::SEND_MESSAGES
                 | Permissions::READ_MESSAGE_HISTORY;
-            let maintenance_access =
-                access | Permissions::MANAGE_CHANNELS | Permissions::MANAGE_ROLES;
-            // Grant Hugh explicit maintenance access before hiding the channel
-            // from @everyone, otherwise a private parent can lock Hugh out in
-            // the middle of provisioning.
+            let maintenance_access = access | Permissions::MANAGE_CHANNELS;
+            // Grant Hugh explicit maintenance access and configure the
+            // quarantine role before hiding the channel from @everyone.
+            // Manage Roles is guild-scoped and cannot be granted by a channel
+            // overwrite, so Hugh must still inherit it while editing the role.
             apply_overwrite(
                 &ctx.http,
                 channel,
@@ -187,17 +187,17 @@ impl QuarantineManager {
             apply_overwrite(
                 &ctx.http,
                 channel,
-                PermissionOverwriteType::Role(RoleId::new(config.guild_id)),
+                PermissionOverwriteType::Role(resources.role_id),
+                access,
                 Permissions::empty(),
-                Permissions::VIEW_CHANNEL,
             )
             .await?;
             apply_overwrite(
                 &ctx.http,
                 channel,
-                PermissionOverwriteType::Role(resources.role_id),
-                access,
+                PermissionOverwriteType::Role(RoleId::new(config.guild_id)),
                 Permissions::empty(),
+                Permissions::VIEW_CHANNEL,
             )
             .await?;
         } else {
