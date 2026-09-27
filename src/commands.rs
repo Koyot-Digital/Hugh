@@ -15,6 +15,7 @@ use serenity::{
 use tracing::{error, info};
 
 use crate::{
+    chat::TalkManager,
     config::Config,
     incident::{Incident, IncidentReporter},
     quarantine::{QuarantineManager, QuarantineStore},
@@ -24,48 +25,54 @@ pub const REPOSITORY_URL: &str = "https://github.com/Koyot-Digital/Hugh";
 
 pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
     let guild_id = GuildId::new(config.guild_id);
+    let mut commands = vec![
+        CreateCommand::new("lock")
+            .description("Lock a channel so regular members cannot send messages")
+            .default_member_permissions(Permissions::MANAGE_CHANNELS)
+            .add_option(CreateCommandOption::new(
+                CommandOptionType::Channel,
+                "channel",
+                "Channel to lock; defaults to the current channel",
+            )),
+        CreateCommand::new("banish")
+            .description("Move a member into quarantine and safely store their roles")
+            .default_member_permissions(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS)
+            .add_option(
+                CreateCommandOption::new(CommandOptionType::User, "user", "Member to quarantine")
+                    .required(true),
+            ),
+        CreateCommand::new("unbanish")
+            .description("Release a member and restore their stored roles")
+            .default_member_permissions(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS)
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::User,
+                    "user",
+                    "Member to release from quarantine",
+                )
+                .required(true),
+            ),
+        CreateCommand::new("help").description("Show Hugh's command and protection guide"),
+        CreateCommand::new("hugh").description("Learn about Hugh and its development"),
+    ];
+    if config.talk.enabled {
+        commands.push(
+            CreateCommand::new("talk")
+                .description("Start a short conversation with Carson")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "length",
+                        "Total Hugh and Carson messages in the conversation",
+                    )
+                    .required(true)
+                    .min_int_value(2)
+                    .max_int_value(config.talk.max_messages as u64),
+                ),
+        );
+    }
     guild_id
-        .set_commands(
-            &ctx.http,
-            vec![
-                CreateCommand::new("lock")
-                    .description("Lock a channel so regular members cannot send messages")
-                    .default_member_permissions(Permissions::MANAGE_CHANNELS)
-                    .add_option(CreateCommandOption::new(
-                        CommandOptionType::Channel,
-                        "channel",
-                        "Channel to lock; defaults to the current channel",
-                    )),
-                CreateCommand::new("banish")
-                    .description("Move a member into quarantine and safely store their roles")
-                    .default_member_permissions(
-                        Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS,
-                    )
-                    .add_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::User,
-                            "user",
-                            "Member to quarantine",
-                        )
-                        .required(true),
-                    ),
-                CreateCommand::new("unbanish")
-                    .description("Release a member and restore their stored roles")
-                    .default_member_permissions(
-                        Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS,
-                    )
-                    .add_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::User,
-                            "user",
-                            "Member to release from quarantine",
-                        )
-                        .required(true),
-                    ),
-                CreateCommand::new("help").description("Show Hugh's command and protection guide"),
-                CreateCommand::new("hugh").description("Learn about Hugh and its development"),
-            ],
-        )
+        .set_commands(&ctx.http, commands)
         .await
         .context("failed to register guild commands")?;
     info!(
@@ -82,6 +89,7 @@ pub async fn handle(
     store: Option<&QuarantineStore>,
     resources: &QuarantineManager,
     incidents: &IncidentReporter,
+    talk_manager: Option<&TalkManager>,
 ) {
     let Interaction::Command(command) = interaction else {
         return;
@@ -99,6 +107,7 @@ pub async fn handle(
         "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
         "help" => help(ctx, &command).await,
         "hugh" => about(ctx, &command).await,
+        "talk" => talk(ctx, &command, talk_manager).await,
         _ => Ok(()),
     };
     if let Err(error) = result {
@@ -131,6 +140,38 @@ pub async fn handle(
             )
             .await;
     }
+}
+
+async fn talk(
+    ctx: &Context,
+    command: &CommandInteraction,
+    talk_manager: Option<&TalkManager>,
+) -> Result<()> {
+    let talk_manager = talk_manager.context("the talk service is disabled")?;
+    if command.user.id.get() != talk_manager.owner_user_id() {
+        bail!("only Hugh's owner can use /talk");
+    }
+    let length = option_integer(command, "length").context("missing length option")?;
+    let length = usize::try_from(length).context("length must be a positive whole number")?;
+    if !(2..=talk_manager.max_messages()).contains(&length) {
+        bail!(
+            "length must be between 2 and {} messages",
+            talk_manager.max_messages()
+        );
+    }
+
+    command.defer_ephemeral(&ctx.http).await?;
+    talk_manager.start(ctx, command.channel_id, length).await?;
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().content(format!(
+                "Started a {length}-message conversation with Carson in <#{}>.",
+                command.channel_id.get()
+            )),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn lock(
@@ -500,6 +541,17 @@ fn option_channel(command: &CommandInteraction) -> Option<ChannelId> {
         .iter()
         .find_map(|option| match option.value {
             CommandDataOptionValue::Channel(id) if option.name == "channel" => Some(id),
+            _ => None,
+        })
+}
+
+fn option_integer(command: &CommandInteraction, name: &str) -> Option<i64> {
+    command
+        .data
+        .options
+        .iter()
+        .find_map(|option| match option.value {
+            CommandDataOptionValue::Integer(value) if option.name == name => Some(value),
             _ => None,
         })
 }

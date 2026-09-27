@@ -57,3 +57,11 @@ enabled = true
 channel_name = "quarantine"
 role_name = "Quarantined"
 store_path = "data/quarantine.jsonl"
+
+[talk]
+enabled = true
+# Only this user can invoke /talk. Carson must be a Discord bot account.
+owner_user_id = "541551772288811009"
+carson_user_id = "1551781118246785055"
+# /talk length counts both Hugh's and Carson's public messages.
+max_messages = 50

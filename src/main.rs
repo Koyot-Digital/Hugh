@@ -1,4 +1,5 @@
 mod bot;
+mod chat;
 mod commands;
 mod config;
 mod detection;
@@ -19,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     bot::Handler,
+    chat::TalkManager,
     config::Config,
     incident::{IncidentReporter, IncidentSink},
     quarantine::{QuarantineManager, QuarantineStore},
@@ -73,12 +75,24 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let talk = if config.talk.enabled {
+        let api_key = env::var("OPENAI_API_KEY").context(
+            "OPENAI_API_KEY is not set; it is required while the /talk command is enabled",
+        )?;
+        if api_key.trim().is_empty() {
+            bail!("OPENAI_API_KEY must not be empty while the /talk command is enabled");
+        }
+        Some(Arc::new(TalkManager::new(api_key, config.talk.clone())?))
+    } else {
+        None
+    };
     let handler = Handler::new(
         Arc::clone(&config),
         Arc::new(SecurityState::new(&config)),
         incidents,
         quarantine,
         QuarantineManager::new(),
+        talk,
     );
 
     let intents = GatewayIntents::GUILDS

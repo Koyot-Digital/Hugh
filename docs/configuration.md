@@ -103,6 +103,7 @@ restoration.
 | --- | --- |
 | `DISCORD_TOKEN` | Required bot token. |
 | `HUGH_INCIDENT_WEBHOOK_URL` | Required private Discord webhook URL for incidents. |
+| `OPENAI_API_KEY` | Required when `[talk].enabled = true`; used only for OpenAI Responses API calls. |
 | `HUGH_CONFIG` | Config path; overridden by `--config`. |
 | `RUST_LOG` | Log filter, such as `hugh=debug,serenity=warn`. |
 | `HUGH_LOG_FORMAT` | Set to `json` for structured process logs. |
@@ -110,11 +111,29 @@ restoration.
 Discord permits member timeouts up to 28 days; Hugh clamps values at that API
 limit.
 
+## `[talk]`
+
+- `enabled`: registers `/talk` and requires `OPENAI_API_KEY` at startup.
+- `owner_user_id`: the only Discord user allowed to invoke `/talk`.
+- `carson_user_id`: Carson's Discord bot user ID. Only messages from this bot
+  continue a conversation.
+- `max_messages`: upper bound accepted by `/talk length`; valid from 2 to 200.
+
+The requested length counts Hugh and Carson messages together. One conversation
+may run in a channel at a time, and an idle conversation expires after 10
+minutes. Hugh rotates through 10 built-in icebreakers, then calls the OpenAI
+Responses API with the fixed `gpt-5-nano` model and a 96-token output cap for
+each response. Conversation history is kept only in memory and is not written
+to incident logs.
+
 ## Slash commands
 
 Hugh registers commands in the configured guild at startup. `/lock`, `/banish`,
 and `/unbanish` have Discord permission defaults and repeat authorization
 checks inside Hugh. Members in `trusted_user_ids` may also use them.
+
+`/talk` does not use moderator permissions or `trusted_user_ids`; it checks the
+invoking user against `talk.owner_user_id` inside the command handler.
 
 `/lock` preserves the channel's existing `@everyone` overwrite and adds denies
 for sending, creating threads, and reacting. This release intentionally does

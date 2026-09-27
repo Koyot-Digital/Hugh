@@ -27,6 +27,8 @@ pub struct Config {
     pub role_guard: RoleGuardConfig,
     #[serde(default)]
     pub quarantine: QuarantineConfig,
+    #[serde(default)]
+    pub talk: TalkConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,6 +170,28 @@ impl Default for QuarantineConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TalkConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "snowflake")]
+    pub owner_user_id: u64,
+    #[serde(deserialize_with = "snowflake")]
+    pub carson_user_id: u64,
+    pub max_messages: usize,
+}
+
+impl Default for TalkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            owner_user_id: 541_551_772_288_811_009,
+            carson_user_id: 1_551_781_118_246_785_055,
+            max_messages: 50,
+        }
+    }
+}
+
 impl Config {
     pub async fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
@@ -239,6 +263,17 @@ impl Config {
                     || self.role_guard.protected_role_ids.contains(&role)
             }) {
                 bail!("the quarantine role cannot be trusted or protected");
+            }
+        }
+        if self.talk.enabled {
+            if self.talk.owner_user_id == 0 {
+                bail!("talk.owner_user_id must be a non-zero Discord ID");
+            }
+            if self.talk.carson_user_id == 0 {
+                bail!("talk.carson_user_id must be a non-zero Discord ID");
+            }
+            if !(2..=200).contains(&self.talk.max_messages) {
+                bail!("talk.max_messages must be between 2 and 200");
             }
         }
         Ok(())

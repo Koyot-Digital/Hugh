@@ -261,6 +261,7 @@ mod tests {
             raids: RaidConfig::default(),
             role_guard: RoleGuardConfig::default(),
             quarantine: crate::config::QuarantineConfig::default(),
+            talk: crate::config::TalkConfig::default(),
         }
     }
 

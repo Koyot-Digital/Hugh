@@ -28,7 +28,7 @@ JSONL incident log.
 3. Create a private incident webhook, then enable the **Server Members Intent**
    and **Message Content Intent** in the Discord Developer Portal.
 4. Invite Hugh with the permissions listed in [the setup guide](docs/setup.md).
-5. Set `DISCORD_TOKEN` and `HUGH_INCIDENT_WEBHOOK_URL`, then start the bot:
+5. Set `DISCORD_TOKEN`, `HUGH_INCIDENT_WEBHOOK_URL`, and `OPENAI_API_KEY`, then start the bot:
 
    ```text
    cargo run --release -- --config config.toml
@@ -40,7 +40,7 @@ Validate configuration without connecting to Discord:
 cargo run -- --config config.toml --check-config
 ```
 
-Docker users can instead copy `.env.example` to `.env`, fill in both required
+Docker users can instead copy `.env.example` to `.env`, fill in the required
 secrets, and run `docker compose up -d --build` after creating the same config
 file.
 
@@ -51,6 +51,11 @@ file.
 - `/unbanish user` restores the stored roles and releases the member.
 - `/help` shows the in-Discord guide.
 - `/hugh` introduces the project and links to this repository.
+- `/talk length` starts an owner-only, API-backed conversation with Carson.
+
+`/talk` counts both bots' public messages toward `length`, uses 10 rotating
+icebreakers, and asks the OpenAI Responses API for each later Hugh reply using
+`gpt-5-nano` with a 96-token output limit.
 
 Mentioning Hugh also shows the short project introduction.
 
