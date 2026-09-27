@@ -33,13 +33,31 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
                 CommandOptionType::Channel,
                 "channel",
                 "Channel to lock; defaults to the current channel",
-            )),
+            ))
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "reason",
+                    "Reason for the case log",
+                )
+                .min_length(1)
+                .max_length(512),
+            ),
         CreateCommand::new("banish")
             .description("Move a member into quarantine and safely store their roles")
             .default_member_permissions(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS)
             .add_option(
                 CreateCommandOption::new(CommandOptionType::User, "user", "Member to quarantine")
                     .required(true),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "reason",
+                    "Reason for the case log",
+                )
+                .min_length(1)
+                .max_length(512),
             ),
         CreateCommand::new("unbanish")
             .description("Release a member and restore their stored roles")
@@ -51,6 +69,15 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
                     "Member to release from quarantine",
                 )
                 .required(true),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "reason",
+                    "Reason for the case log",
+                )
+                .min_length(1)
+                .max_length(512),
             ),
         CreateCommand::new("help").description("Show Hugh's command and protection guide"),
         CreateCommand::new("hugh").description("Learn about Hugh and its development"),
@@ -121,24 +148,24 @@ pub async fn handle(
         } else {
             let _ = respond_text(ctx, &command, message, true).await;
         }
-        let mut incident = Incident::new("command_failure", config.guild_id, "command_failed");
-        incident.actor_id = Some(command.user.id.get());
+        let mut incident = Incident::new(
+            "command_failure",
+            config.guild_id,
+            "command_failed",
+            format!("/{} failed: {error_message}", command.data.name),
+        );
+        incident.moderator = Some((&command.user).into());
         incident.channel_id = Some(command.channel_id.get());
         incident.details.insert(
             "command".into(),
             serde_json::Value::String(command.data.name.clone()),
         );
-        incidents
-            .report(
-                &ctx.http,
-                incident,
-                format!(
-                    "Command /{} by user {} failed: {error_message}",
-                    command.data.name,
-                    command.user.id.get()
-                ),
-            )
-            .await;
+        if let Some(user_id) = option_user(&command) {
+            incident
+                .details
+                .insert("target_user_id".into(), user_id.get().into());
+        }
+        incidents.report(&ctx.http, incident).await;
     }
 }
 
@@ -203,20 +230,11 @@ async fn lock(
     )
     .await?;
 
-    let mut incident = Incident::new("channel_lock", config.guild_id, "channel_locked");
-    incident.actor_id = Some(command.user.id.get());
+    let reason = option_string(command, "reason").unwrap_or("Channel locked by a moderator");
+    let mut incident = Incident::new("channel_lock", config.guild_id, "channel_locked", reason);
+    incident.moderator = Some((&command.user).into());
     incident.channel_id = Some(channel_id.get());
-    incidents
-        .report(
-            &ctx.http,
-            incident,
-            format!(
-                "Channel {} was locked by moderator {}.",
-                channel_id.get(),
-                command.user.id.get()
-            ),
-        )
-        .await;
+    incidents.report(&ctx.http, incident).await;
     command
         .edit_response(
             &ctx.http,
@@ -312,24 +330,17 @@ async fn banish(
             join_ids(&failed)
         )
     };
-    let mut incident = Incident::new("member_banish", config.guild_id, action);
-    incident.actor_id = Some(command.user.id.get());
+    let reason = option_string(command, "reason").unwrap_or("Member quarantined by a moderator");
+    let mut incident = Incident::new("member_banish", config.guild_id, action, reason);
+    incident.subject = Some((&member.user).into());
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
     incident.details = BTreeMap::from([
         ("target_user_id".into(), user_id.get().into()),
         ("stored_role_ids".into(), serde_json::json!(original_roles)),
         ("failed_role_ids".into(), serde_json::json!(failed)),
     ]);
-    incidents
-        .report(
-            &ctx.http,
-            incident,
-            format!(
-                "Moderator {} banished user {} ({action}).",
-                command.user.id.get(),
-                user_id.get()
-            ),
-        )
-        .await;
+    incidents.report(&ctx.http, incident).await;
     command
         .edit_response(&ctx.http, EditInteractionResponse::new().content(response))
         .await?;
@@ -408,24 +419,22 @@ async fn unbanish(
     } else {
         format!(" Deleted roles skipped: `{}`.", join_ids(&missing))
     };
-    let mut incident = Incident::new("member_unbanish", config.guild_id, "member_released");
-    incident.actor_id = Some(command.user.id.get());
+    let reason = option_string(command, "reason").unwrap_or("Member released from quarantine");
+    let mut incident = Incident::new(
+        "member_unbanish",
+        config.guild_id,
+        "member_released",
+        reason,
+    );
+    incident.subject = Some((&member.user).into());
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
     incident.details = BTreeMap::from([
         ("target_user_id".into(), user_id.get().into()),
         ("restored_role_ids".into(), serde_json::json!(restored)),
         ("missing_role_ids".into(), serde_json::json!(missing)),
     ]);
-    incidents
-        .report(
-            &ctx.http,
-            incident,
-            format!(
-                "Moderator {} released user {} from quarantine.",
-                command.user.id.get(),
-                user_id.get()
-            ),
-        )
-        .await;
+    incidents.report(&ctx.http, incident).await;
     command
         .edit_response(
             &ctx.http,
@@ -442,9 +451,10 @@ async fn unbanish(
 async fn help(ctx: &Context, command: &CommandInteraction) -> Result<()> {
     let embed = CreateEmbed::new()
         .title("Hugh help")
-        .description("Hugh protects this community from raids, mention abuse, spam, malicious invites, and unauthorized role elevation.")
+        .description("Hugh protects this community from raids, risky new accounts, mention abuse, coordinated spam, unsafe links, malicious invites, and unauthorized role elevation.")
         .field("Public", "`/hugh` - about the project\n`/help` - this guide", false)
-        .field("Moderation", "`/lock [channel]` - stop regular members sending\n`/banish user` - isolate a member and save their roles\n`/unbanish user` - restore their roles", false)
+        .field("Moderation", "`/lock [channel] [reason]` - stop regular members sending\n`/banish user [reason]` - isolate a member and save their roles\n`/unbanish user [reason]` - restore their roles", false)
+        .field("Case logs", "Every enforcement action receives a durable case number with the user, moderator, reason, outcome, channel, and relevant evidence.", false)
         .field("Open source", format!("Contribute or report issues at {REPOSITORY_URL}"), false)
         .colour(0x0058_65F2);
     respond_embed(ctx, command, embed, true).await
@@ -457,7 +467,7 @@ async fn about(ctx: &Context, command: &CommandInteraction) -> Result<()> {
 pub fn about_embed() -> CreateEmbed {
     CreateEmbed::new()
         .title("Hi, I'm Hugh")
-        .description("I'm this community's open-source security bot. I watch for raids, abusive mentions, spam, unsafe invites, and unauthorized role elevation.")
+        .description("I'm this community's open-source security bot. I watch for raids, risky new accounts, abusive mentions, coordinated spam, unsafe links, and unauthorized role elevation.")
         .field("Help build Hugh", format!("Contributions are welcome: {REPOSITORY_URL}"), false)
         .colour(0x0058_65F2)
 }
@@ -552,6 +562,20 @@ fn option_integer(command: &CommandInteraction, name: &str) -> Option<i64> {
         .iter()
         .find_map(|option| match option.value {
             CommandDataOptionValue::Integer(value) if option.name == name => Some(value),
+            _ => None,
+        })
+}
+
+fn option_string<'a>(command: &'a CommandInteraction, name: &str) -> Option<&'a str> {
+    command
+        .data
+        .options
+        .iter()
+        .find_map(|option| match &option.value {
+            CommandDataOptionValue::String(value) if option.name == name => {
+                let value = value.trim();
+                (!value.is_empty()).then_some(value)
+            }
             _ => None,
         })
 }

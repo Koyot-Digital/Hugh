@@ -2,7 +2,8 @@
 guild_id = "123456789012345678"
 incident_log_path = "data/incidents.jsonl"
 
-# Users with these IDs bypass message and role guards. Keep this list short.
+# Users with these IDs bypass message and account-age guards. Protected-role
+# membership uses the separate role_guard.authorized_member_ids list.
 trusted_user_ids = ["123456789012345679"]
 
 # Members with one of these roles bypass message guards. Do not put a general
@@ -26,6 +27,11 @@ max_messages = 7
 window_seconds = 8
 max_duplicates = 3
 duplicate_window_seconds = 30
+# The fifth distinct account posting the same normalized message inside 20
+# seconds is treated as a coordinated spam wave. Short messages are ignored.
+max_coordinated_duplicates = 4
+coordinated_window_seconds = 20
+coordinated_min_length = 12
 timeout_seconds = 300
 
 [invites]
@@ -33,6 +39,16 @@ enabled = true
 # Invites to your own community can be added here without the discord.gg/ part.
 allowed_codes = []
 timeout_seconds = 300
+
+[content]
+enabled = true
+# Applies to both new and edited messages. Subdomains of a listed domain are
+# blocked too. Store host names only, without https:// or a path.
+max_links = 4
+max_attachments = 6
+max_newlines = 12
+blocked_domains = []
+timeout_seconds = 600
 
 [raids]
 enabled = true
@@ -42,6 +58,13 @@ raid_mode_seconds = 600
 minimum_account_age_seconds = 86400
 # Supported values: "log", "timeout", "kick". Start with "log" while tuning.
 young_account_action = "log"
+timeout_seconds = 3600
+
+[new_accounts]
+enabled = true
+minimum_account_age_seconds = 3600
+# Supported values: "log", "timeout", "kick". Log is the safe rollout default.
+action = "log"
 timeout_seconds = 3600
 
 [role_guard]

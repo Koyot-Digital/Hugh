@@ -17,7 +17,8 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
 - `bot.rs` adapts Serenity events and performs Discord API actions.
 - `commands.rs` registers and authorizes slash commands and enforces quarantine.
 - `quarantine.rs` maintains an append-only role recovery journal.
-- `incident.rs` writes machine-readable records and delivers webhook reports.
+- `incident.rs` assigns durable case numbers, writes machine-readable records,
+  and renders moderator-friendly webhook reports.
 
 Detector code does not call Discord. This keeps threshold behavior cheap to
 test and lets future frontends reuse the same policy. Discord API failures never

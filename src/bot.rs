@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use chrono::Utc;
 use serenity::{
     all::{
-        Context, EventHandler, GuildChannel, GuildId, Interaction, Member, Message, Ready, RoleId,
-        Timestamp,
+        Context, EventHandler, GuildChannel, GuildId, Interaction, Member, Message,
+        MessageUpdateEvent, Ready, RoleId, Timestamp,
     },
     async_trait,
     builder::CreateMessage,
@@ -15,10 +15,10 @@ use crate::{
     chat::TalkManager,
     commands,
     config::{Config, YoungAccountAction},
-    detection::unauthorized_protected_roles,
+    detection::{mention_counts, unauthorized_protected_roles},
     incident::{Incident, IncidentReporter},
     quarantine::{QuarantineManager, QuarantineStore},
-    state::{MessageInput, SecurityState},
+    state::{MessageDecision, MessageInput, SecurityState},
 };
 
 pub struct Handler {
@@ -50,7 +50,7 @@ impl Handler {
         }
     }
 
-    async fn handle_message(&self, ctx: &Context, message: Message) {
+    async fn handle_message(&self, ctx: &Context, message: Message, is_edit: bool) {
         let Some(guild_id) = message.guild_id else {
             return;
         };
@@ -60,48 +60,86 @@ impl Handler {
             return;
         }
 
-        let roles: Vec<u64> = message.member.as_ref().map_or_else(Vec::new, |member| {
+        let roles: Vec<u64> = if let Some(member) = &message.member {
             member.roles.iter().map(|id| id.get()).collect()
-        });
+        } else if message.webhook_id.is_none() {
+            guild_id
+                .member(&ctx.http, message.author.id)
+                .await
+                .map_or_else(
+                    |_| Vec::new(),
+                    |member| member.roles.iter().map(|id| id.get()).collect(),
+                )
+        } else {
+            Vec::new()
+        };
         let mentions_hugh = message
             .mentions
             .iter()
             .any(|user| user.id == ctx.cache.current_user().id);
         if self.config.is_trusted(message.author.id.get(), roles) {
-            let talk_handled = self.handle_talk_message(ctx, &message).await;
-            if mentions_hugh && !talk_handled {
-                self.send_about(ctx, message.channel_id).await;
+            if !is_edit {
+                let talk_handled = self.handle_talk_message(ctx, &message).await;
+                if mentions_hugh && !talk_handled {
+                    self.send_about(ctx, message.channel_id).await;
+                }
             }
             return;
         }
 
-        let everyone_mentions = usize::from(message.mention_everyone);
-        let explicit_mentions = message.mentions.len() + message.mention_roles.len();
+        let mut parsed_mentions = mention_counts(&message.content, message.mention_everyone);
+        let resolved_mentions = message.mentions.len() + message.mention_roles.len();
+        let everyone_mentions = parsed_mentions.everyone;
+        parsed_mentions.direct = parsed_mentions.direct.max(resolved_mentions);
+        let total_mentions = parsed_mentions.total();
         let mentioned_roles: Vec<u64> = message.mention_roles.iter().map(|id| id.get()).collect();
         let input = MessageInput {
             user_id: message.author.id.get(),
             content: &message.content,
-            total_mentions: explicit_mentions + everyone_mentions,
+            total_mentions,
             everyone_mentions,
             mentioned_roles: &mentioned_roles,
+            attachment_count: message.attachments.len(),
+            count_towards_rate_limits: !is_edit,
         };
         let decision = self
             .state
             .inspect_message(&input, &self.config, Instant::now());
         if !decision.should_delete() {
-            let talk_handled = self.handle_talk_message(ctx, &message).await;
-            if mentions_hugh && !talk_handled {
-                self.send_about(ctx, message.channel_id).await;
+            if !is_edit {
+                let talk_handled = self.handle_talk_message(ctx, &message).await;
+                if mentions_hugh && !talk_handled {
+                    self.send_about(ctx, message.channel_id).await;
+                }
             }
             return;
         }
 
-        let reasons = decision
+        self.enforce_message(ctx, guild_id, message, is_edit, total_mentions, decision)
+            .await;
+    }
+
+    async fn enforce_message(
+        &self,
+        ctx: &Context,
+        guild_id: GuildId,
+        message: Message,
+        is_edit: bool,
+        total_mentions: usize,
+        decision: MessageDecision,
+    ) {
+        let reason_codes = decision
             .violations
             .iter()
             .map(|violation| violation.as_str())
             .collect::<Vec<_>>()
             .join(",");
+        let reasons = decision
+            .violations
+            .iter()
+            .map(|violation| violation.label())
+            .collect::<Vec<_>>()
+            .join(", ");
         let delete_result = message.delete(&ctx.http).await;
         if let Err(error) = &delete_result {
             error!(
@@ -111,44 +149,48 @@ impl Handler {
             );
         }
 
-        let mut action = if delete_result.is_ok() {
-            "message_deleted"
-        } else {
-            "delete_failed"
-        };
         let automated_sender = message.author.bot || message.webhook_id.is_some();
-        if decision.timeout_seconds > 0 && !automated_sender {
-            match timeout_member(ctx, guild_id, message.author.id, decision.timeout_seconds).await {
-                Ok(()) => action = "message_deleted_and_member_timed_out",
-                Err(error) => {
-                    error!(
-                        ?error,
-                        user_id = message.author.id.get(),
-                        "failed to time out member"
-                    );
-                    action = "message_handled_timeout_failed";
-                }
-            }
-        }
-
-        let mut incident = Incident::new("message_guard", self.config.guild_id, action);
-        incident.actor_id = Some(message.author.id.get());
-        incident.channel_id = Some(message.channel_id.get());
-        incident.details = BTreeMap::from([
-            ("message_id".into(), message.id.get().into()),
-            ("reasons".into(), reasons.clone().into()),
-        ]);
-        self.incidents
-            .report(
-                &ctx.http,
-                incident,
-                format!(
-                    "Message guard: user {} in channel {} - {reasons} ({action})",
-                    message.author.id.get(),
-                    message.channel_id.get()
-                ),
+        let timeout_result = if decision.timeout_seconds > 0 && !automated_sender {
+            Some(
+                match timeout_member(ctx, guild_id, message.author.id, decision.timeout_seconds)
+                    .await
+                {
+                    Ok(()) => true,
+                    Err(error) => {
+                        error!(
+                            ?error,
+                            user_id = message.author.id.get(),
+                            "failed to time out member"
+                        );
+                        false
+                    }
+                },
             )
-            .await;
+        } else {
+            None
+        };
+        let action = match (delete_result.is_ok(), timeout_result) {
+            (true, Some(true)) => "message_deleted_and_member_timed_out",
+            (true, Some(false)) => "message_deleted_timeout_failed",
+            (false, Some(true)) => "member_timed_out_delete_failed",
+            (false, Some(false)) => "enforcement_failed",
+            (true, None) => "message_deleted",
+            (false, None) => "delete_failed",
+        };
+
+        let mut incident = Incident::new("message_guard", self.config.guild_id, action, reasons);
+        incident.subject = Some((&message.author).into());
+        incident.channel_id = Some(message.channel_id.get());
+        incident.details = message_evidence(
+            &message,
+            is_edit,
+            total_mentions,
+            &decision,
+            &reason_codes,
+            timeout_result,
+            automated_sender,
+        );
+        self.incidents.report(&ctx.http, incident).await;
     }
 
     async fn handle_join(&self, ctx: &Context, mut member: Member) {
@@ -166,41 +208,62 @@ impl Handler {
         );
 
         if decision.raid_activated {
-            let mut incident =
-                Incident::new("raid_started", self.config.guild_id, "raid_mode_enabled");
+            let mut incident = Incident::new(
+                "raid_started",
+                self.config.guild_id,
+                "raid_mode_enabled",
+                "The server join-rate threshold was reached",
+            );
             incident
                 .details
                 .insert("joins_in_window".into(), decision.join_count.into());
-            self.incidents
-                .report(
-                    &ctx.http,
-                    incident,
-                    format!(
-                        "Raid mode activated: {} joins inside the configured window.",
-                        decision.join_count
-                    ),
-                )
-                .await;
+            incident.details.insert(
+                "window_seconds".into(),
+                self.config.raids.join_window_seconds.into(),
+            );
+            incident.details.insert(
+                "raid_mode_seconds".into(),
+                self.config.raids.raid_mode_seconds.into(),
+            );
+            self.incidents.report(&ctx.http, incident).await;
         }
 
-        if !decision.raid_active
-            || !decision.young_account
-            || self.config.trusted_user_ids.contains(&member.user.id.get())
-        {
+        if self.config.trusted_user_ids.contains(&member.user.id.get()) {
             return;
         }
 
-        let (action, result) = match self.config.raids.young_account_action {
+        let policy = if decision.raid_active && decision.young_account {
+            Some((
+                "young_account_during_raid",
+                "A young account joined while raid mode was active",
+                self.config.raids.young_account_action,
+                self.config.raids.timeout_seconds,
+            ))
+        } else if self.config.new_accounts.enabled
+            && decision.account_age_seconds < self.config.new_accounts.minimum_account_age_seconds
+        {
+            Some((
+                "new_account_join",
+                "An account younger than the configured minimum joined",
+                self.config.new_accounts.action,
+                self.config.new_accounts.timeout_seconds,
+            ))
+        } else {
+            None
+        };
+        let Some((kind, reason, configured_action, timeout_seconds)) = policy else {
+            return;
+        };
+
+        let (action, result) = match configured_action {
             YoungAccountAction::Log => ("logged", Ok(())),
             YoungAccountAction::Timeout => {
-                let result =
-                    timeout_existing_member(ctx, &mut member, self.config.raids.timeout_seconds)
-                        .await;
+                let result = timeout_existing_member(ctx, &mut member, timeout_seconds).await;
                 ("timed_out", result)
             }
             YoungAccountAction::Kick => {
                 let result = member
-                    .kick_with_reason(&ctx.http, "Hugh: young account joined during raid mode")
+                    .kick_with_reason(&ctx.http, "Hugh: account age protection")
                     .await;
                 ("kicked", result)
             }
@@ -218,27 +281,21 @@ impl Handler {
                 "raid enforcement failed"
             );
         }
-        let mut incident = Incident::new(
-            "young_account_during_raid",
-            self.config.guild_id,
-            final_action,
-        );
-        incident.actor_id = Some(member.user.id.get());
+        let mut incident = Incident::new(kind, self.config.guild_id, final_action, reason);
+        incident.subject = Some((&member.user).into());
         incident.details.insert(
             "account_age_seconds".into(),
             decision.account_age_seconds.into(),
         );
-        self.incidents
-            .report(
-                &ctx.http,
-                incident,
-                format!(
-                    "Raid guard: user {} is {} seconds old ({final_action}).",
-                    member.user.id.get(),
-                    decision.account_age_seconds
-                ),
-            )
-            .await;
+        incident
+            .details
+            .insert("joins_in_window".into(), decision.join_count.into());
+        if matches!(configured_action, YoungAccountAction::Timeout) {
+            incident
+                .details
+                .insert("timeout_seconds".into(), timeout_seconds.into());
+        }
+        self.incidents.report(&ctx.http, incident).await;
     }
 
     async fn handle_member_update(&self, ctx: &Context, member: Member) {
@@ -285,25 +342,20 @@ impl Handler {
         } else {
             "role_removal_failed"
         };
-        let mut incident =
-            Incident::new("unauthorized_protected_role", self.config.guild_id, action);
-        incident.actor_id = Some(member.user.id.get());
+        let mut incident = Incident::new(
+            "unauthorized_protected_role",
+            self.config.guild_id,
+            action,
+            "Member held one or more protected roles without authorisation",
+        );
+        incident.subject = Some((&member.user).into());
         incident
             .details
             .insert("removed_role_ids".into(), serde_json::json!(removed));
         incident
             .details
             .insert("failed_role_ids".into(), serde_json::json!(failed));
-        self.incidents
-            .report(
-                &ctx.http,
-                incident,
-                format!(
-                    "Role guard: unauthorized protected role(s) found on user {} ({action}).",
-                    member.user.id.get()
-                ),
-            )
-            .await;
+        self.incidents.report(&ctx.http, incident).await;
     }
 
     async fn send_about(&self, ctx: &Context, channel_id: serenity::all::ChannelId) {
@@ -349,19 +401,39 @@ impl EventHandler for Handler {
                 "quarantine_configuration",
                 self.config.guild_id,
                 "configuration_failed",
+                "Hugh could not provision quarantine isolation; check permissions, role hierarchy, and pinned resource IDs",
             );
-            self.incidents
-                .report(
-                    &ctx.http,
-                    incident,
-                    "Hugh could not provision quarantine isolation. Check Manage Roles, Manage Channels, role hierarchy, and any pinned resource IDs.",
-                )
-                .await;
+            self.incidents.report(&ctx.http, incident).await;
         }
     }
 
     async fn message(&self, ctx: Context, message: Message) {
-        self.handle_message(&ctx, message).await;
+        self.handle_message(&ctx, message, false).await;
+    }
+
+    async fn message_update(
+        &self,
+        ctx: Context,
+        _old_if_available: Option<Message>,
+        new: Option<Message>,
+        event: MessageUpdateEvent,
+    ) {
+        let message = if let Some(message) = new {
+            message
+        } else {
+            match event.channel_id.message(&ctx.http, event.id).await {
+                Ok(message) => message,
+                Err(error) => {
+                    error!(
+                        ?error,
+                        message_id = event.id.get(),
+                        "failed to fetch edited message for protection scan"
+                    );
+                    return;
+                }
+            }
+        };
+        self.handle_message(&ctx, message, true).await;
     }
 
     async fn guild_member_addition(&self, ctx: Context, new_member: Member) {
@@ -419,6 +491,49 @@ impl EventHandler for Handler {
             );
         }
     }
+}
+
+fn message_evidence(
+    message: &Message,
+    is_edit: bool,
+    total_mentions: usize,
+    decision: &MessageDecision,
+    reason_codes: &str,
+    timeout_result: Option<bool>,
+    automated_sender: bool,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut details = BTreeMap::from([
+        ("message_id".into(), message.id.get().into()),
+        (
+            "source".into(),
+            if is_edit {
+                "message_edit"
+            } else {
+                "message_create"
+            }
+            .into(),
+        ),
+        ("reasons".into(), reason_codes.into()),
+    ]);
+    for (key, count) in [
+        ("total_mentions", total_mentions),
+        ("attachment_count", message.attachments.len()),
+        ("link_count", decision.link_count),
+        ("coordinated_users", decision.coordinated_users),
+    ] {
+        if count > 0 {
+            details.insert(key.into(), count.into());
+        }
+    }
+    if timeout_result.is_some() {
+        details.insert("timeout_seconds".into(), decision.timeout_seconds.into());
+    } else if automated_sender && decision.timeout_seconds > 0 {
+        details.insert("timeout_skipped".into(), "automated sender".into());
+    }
+    if let Some(domain) = &decision.blocked_domain {
+        details.insert("blocked_domain".into(), domain.clone().into());
+    }
+    details
 }
 
 async fn timeout_member(

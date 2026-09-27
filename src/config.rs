@@ -22,7 +22,11 @@ pub struct Config {
     #[serde(default)]
     pub invites: InviteConfig,
     #[serde(default)]
+    pub content: ContentGuardConfig,
+    #[serde(default)]
     pub raids: RaidConfig,
+    #[serde(default)]
+    pub new_accounts: NewAccountConfig,
     #[serde(default)]
     pub role_guard: RoleGuardConfig,
     #[serde(default)]
@@ -66,6 +70,9 @@ pub struct SpamConfig {
     pub window_seconds: u64,
     pub max_duplicates: usize,
     pub duplicate_window_seconds: u64,
+    pub max_coordinated_duplicates: usize,
+    pub coordinated_window_seconds: u64,
+    pub coordinated_min_length: usize,
     pub timeout_seconds: u64,
 }
 
@@ -77,6 +84,9 @@ impl Default for SpamConfig {
             window_seconds: 8,
             max_duplicates: 3,
             duplicate_window_seconds: 30,
+            max_coordinated_duplicates: 4,
+            coordinated_window_seconds: 20,
+            coordinated_min_length: 12,
             timeout_seconds: 300,
         }
     }
@@ -100,12 +110,56 @@ impl Default for InviteConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContentGuardConfig {
+    pub enabled: bool,
+    pub max_links: usize,
+    pub max_attachments: usize,
+    pub max_newlines: usize,
+    pub blocked_domains: HashSet<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for ContentGuardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_links: 4,
+            max_attachments: 6,
+            max_newlines: 12,
+            blocked_domains: HashSet::new(),
+            timeout_seconds: 600,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum YoungAccountAction {
     Log,
     Timeout,
     Kick,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NewAccountConfig {
+    pub enabled: bool,
+    pub minimum_account_age_seconds: i64,
+    pub action: YoungAccountAction,
+    pub timeout_seconds: u64,
+}
+
+impl Default for NewAccountConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            minimum_account_age_seconds: 3_600,
+            action: YoungAccountAction::Log,
+            timeout_seconds: 3_600,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -226,7 +280,21 @@ impl Config {
             "spam.duplicate_window_seconds",
             &self.spam.duplicate_window_seconds,
         )?;
+        positive(
+            "spam.max_coordinated_duplicates",
+            &self.spam.max_coordinated_duplicates,
+        )?;
+        positive(
+            "spam.coordinated_window_seconds",
+            &self.spam.coordinated_window_seconds,
+        )?;
+        positive(
+            "spam.coordinated_min_length",
+            &self.spam.coordinated_min_length,
+        )?;
         positive("spam.timeout_seconds", &self.spam.timeout_seconds)?;
+        positive("content.timeout_seconds", &self.content.timeout_seconds)?;
+        validate_domains(&self.content.blocked_domains)?;
         positive("raids.join_threshold", &self.raids.join_threshold)?;
         positive("raids.join_window_seconds", &self.raids.join_window_seconds)?;
         positive("raids.raid_mode_seconds", &self.raids.raid_mode_seconds)?;
@@ -234,6 +302,13 @@ impl Config {
         if self.raids.minimum_account_age_seconds < 0 {
             bail!("raids.minimum_account_age_seconds cannot be negative");
         }
+        if self.new_accounts.minimum_account_age_seconds < 0 {
+            bail!("new_accounts.minimum_account_age_seconds cannot be negative");
+        }
+        positive(
+            "new_accounts.timeout_seconds",
+            &self.new_accounts.timeout_seconds,
+        )?;
         if self.role_guard.enabled && self.role_guard.protected_role_ids.is_empty() {
             bail!("role_guard is enabled but protected_role_ids is empty");
         }
@@ -294,6 +369,18 @@ where
 {
     if *value == T::from(0) {
         bail!("{name} must be positive");
+    }
+    Ok(())
+}
+
+fn validate_domains(domains: &HashSet<String>) -> Result<()> {
+    for domain in domains {
+        let trimmed = domain.trim().trim_matches('.');
+        if trimmed.is_empty() || trimmed.contains(['/', ':', ' ', '\\']) || !trimmed.contains('.') {
+            bail!(
+                "content.blocked_domains entries must be host names without a scheme or path: {domain:?}"
+            );
+        }
     }
     Ok(())
 }
@@ -382,5 +469,21 @@ role_id = "2""#,
         .unwrap();
         config.role_guard.enabled = false;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn blocked_domains_must_be_bare_hosts() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[content]
+blocked_domains = ["https://bad.example/path"]"#,
+        )
+        .unwrap();
+        config.role_guard.enabled = false;
+        assert!(config.validate().is_err());
+
+        config.content.blocked_domains = HashSet::from(["bad.example".to_owned()]);
+        assert!(config.validate().is_ok());
     }
 }

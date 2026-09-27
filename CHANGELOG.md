@@ -7,6 +7,12 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
+- Durable, numbered case logs with user snapshots, moderator identity, reasons,
+  action outcomes, channel context, and structured evidence.
+- Optional reasons for `/lock`, `/banish`, and `/unbanish`.
+- Edited-message scanning, repeated-mention counting, coordinated multi-account
+  spam detection, content limits, blocked domains, and standalone new-account
+  screening.
 - Webhook incident delivery with a local JSONL fallback.
 - `/lock`, `/banish`, `/unbanish`, `/help`, and `/hugh` guild commands.
 - Durable quarantine role snapshots and automatic channel isolation.

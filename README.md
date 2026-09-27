@@ -9,7 +9,11 @@ The current core protects against:
 - mass user, role, `@everyone`, and `@here` mentions;
 - repeated pings of protected staff roles;
 - message floods and repeated-message spam;
+- coordinated copy/paste spam across multiple accounts;
 - unapproved Discord invite links;
+- blocked domains, link floods, attachment floods, and excessive line breaks;
+- unsafe content added by editing an existing message;
+- configurable screening of newly created accounts outside raid mode;
 - self-elevation into protected roles;
 - reversible member quarantine with durable role snapshots;
 - automatic quarantine role/channel provisioning and server-wide isolation;
@@ -17,8 +21,10 @@ The current core protects against:
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
 exempted, all enforcement is limited to one guild, and significant actions are
-delivered by webhook and written to both structured logs and an append-only
-JSONL incident log.
+delivered as numbered, moderator-friendly webhook cases and written to both
+structured logs and an append-only JSONL incident log. Case reports include the
+user, username, Discord ID, moderator, reason, action, channel, and relevant
+evidence without retaining message bodies.
 
 ## Quick start
 
@@ -46,9 +52,9 @@ file.
 
 ## Commands
 
-- `/lock [channel]` locks the selected or current channel.
-- `/banish user` stores the member's roles and moves them into quarantine.
-- `/unbanish user` restores the stored roles and releases the member.
+- `/lock [channel] [reason]` locks the selected or current channel.
+- `/banish user [reason]` stores the member's roles and moves them into quarantine.
+- `/unbanish user [reason]` restores the stored roles and releases the member.
 - `/help` shows the in-Discord guide.
 - `/hugh` introduces the project and links to this repository.
 - `/talk length` starts an owner-only, API-backed conversation with Carson.

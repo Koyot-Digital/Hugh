@@ -22,7 +22,7 @@ scopes and these bot permissions:
 - Read Message History
 - Manage Messages
 - Moderate Members
-- Kick Members only if `young_account_action = "kick"`
+- Kick Members if either account-age action is `"kick"`
 - Manage Roles if the role guard or quarantine is enabled
 - Manage Channels for `/lock` and quarantine isolation
 
@@ -33,8 +33,9 @@ every role it must remove. Discord's role hierarchy applies even if the matching
 permission is present.
 
 Restrict the webhook's incident channel so only appropriate staff can view it.
-Reports include user, channel, role, and message IDs. A local JSONL copy remains
-available if webhook delivery fails.
+Reports are durable numbered cases and include user identity, moderator,
+reason, action outcome, channel, and relevant evidence. A local JSONL copy
+remains available if webhook delivery fails.
 
 ## 3. Quarantine resources
 
@@ -67,8 +68,9 @@ IDs are optional; omit both for automatic provisioning:
 cargo run -- --config config.toml --check-config
 ```
 
-Start with raid action `log`, watch normal traffic, and tune thresholds before
-enabling `timeout` or `kick`.
+Start with both account-age actions set to `log`, watch normal traffic, and tune
+thresholds before enabling `timeout` or `kick`. Add blocked domains as bare
+hosts such as `bad.example`, never as complete URLs.
 
 ## 5. Run
 
