@@ -121,7 +121,7 @@ unbanish = "moderator"
 # Icons used on case and lookup cards. Every slot has a plain-emoji fallback,
 # so this whole section is optional. Upload Lucide-style emoji to the server and
 # paste them here as <:name:id> to brand the cards. Slots: case, reason, details,
-# member, moderator, channel, deleted, timeout, kicked, raid, join, role,
+# pin, member, moderator, channel, deleted, timeout, kicked, raid, join, role,
 # quarantine, release, lock, denied, failed, flagged, safe, review, unknown,
 # roblox, discord, group, source.
 [icons]

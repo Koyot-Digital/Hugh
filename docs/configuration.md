@@ -209,7 +209,8 @@ form. An unknown slot name stops startup; the slots are:
 
 | Slot | Where it appears | Lucide icon to upload |
 | --- | --- | --- |
-| `case` | case titles with no specific outcome, pin button | `folder-open` |
+| `case` | case titles with no specific outcome | `folder-open` |
+| `pin` | the Pin to mod log button | `pin` |
 | `reason` | the "why" line of every case | `file-text` |
 | `details` | evidence block, lookup findings | `search` |
 | `member` | member reference, Discord ID field | `user-round` |

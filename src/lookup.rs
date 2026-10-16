@@ -261,7 +261,7 @@ impl Outcome {
         // A button label is plain text: emoji markup belongs in the separate
         // emoji field, or `<:case:1234>` would be printed verbatim. An icon
         // Discord cannot parse is simply left off the button.
-        if let Ok(emoji) = ReactionType::try_from(config.icon("case").to_owned()) {
+        if let Ok(emoji) = ReactionType::try_from(config.icon("pin").to_owned()) {
             button = button.emoji(emoji);
         }
         CreateActionRow::Buttons(vec![button])
@@ -1026,13 +1026,13 @@ mod tests {
         assert_eq!(button["label"].as_str().unwrap(), "Pin to mod log");
         // The fallback icon is a unicode emoji, so it parses into the button's
         // own emoji field rather than being printed in the label.
-        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "🗂️");
+        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "📌");
 
         let custom: Config = toml::from_str(
             "guild_id = \"1\"
 
 [icons]
-case = \"<:case:1560745728769523902>\"",
+pin = \"<:pin:1560745728769523902>\"",
         )
         .unwrap();
         let row = serde_json::to_value(outcome.pin_button(&custom)).unwrap();
@@ -1042,7 +1042,7 @@ case = \"<:case:1560745728769523902>\"",
             button["emoji"]["id"].as_str().unwrap(),
             "1560745728769523902"
         );
-        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "case");
+        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "pin");
     }
 
     #[test]

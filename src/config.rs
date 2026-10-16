@@ -296,8 +296,9 @@ pub struct DiscordPowers {
 /// Every icon slot Hugh renders, with the plain-emoji fallback used when the
 /// operator has not uploaded a matching custom emoji. Keys are stable; the
 /// Lucide icon each one is modelled on is noted in `docs/configuration.md`.
-pub const ICONS: [(&str, &str); 25] = [
+pub const ICONS: [(&str, &str); 26] = [
     ("case", "🗂️"),
+    ("pin", "📌"),
     ("reason", "📝"),
     ("details", "🔎"),
     ("member", "👤"),
