@@ -15,7 +15,10 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
 - `detection.rs` contains pure, side-effect-free content and role checks.
 - `state.rs` owns rolling windows and turns observations into decisions.
 - `bot.rs` adapts Serenity events and performs Discord API actions.
-- `commands.rs` registers and authorizes slash commands and enforces quarantine.
+- `commands.rs` registers slash commands, resolves staff tiers, and enforces
+  quarantine.
+- `lookup.rs` renders the `/rotector` staff lookups as readable case cards.
+- `rotector.rs` is a read-only client for the Rotector safety lookup API.
 - `quarantine.rs` maintains an append-only role recovery journal.
 - `incident.rs` assigns durable case numbers, writes machine-readable records,
   and renders moderator-friendly webhook reports.

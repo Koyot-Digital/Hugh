@@ -12,12 +12,12 @@ use serenity::{
 use tracing::{error, info};
 
 use crate::{
-    chat::TalkManager,
     commands,
     config::{Config, YoungAccountAction},
     detection::{mention_counts, unauthorized_protected_roles},
     incident::{Incident, IncidentReporter},
     quarantine::{QuarantineManager, QuarantineStore},
+    rotector::RotectorClient,
     state::{MessageDecision, MessageInput, SecurityState},
 };
 
@@ -27,7 +27,7 @@ pub struct Handler {
     incidents: IncidentReporter,
     quarantine: Option<QuarantineStore>,
     quarantine_resources: QuarantineManager,
-    talk: Option<Arc<TalkManager>>,
+    rotector: Option<Arc<RotectorClient>>,
 }
 
 impl Handler {
@@ -38,7 +38,7 @@ impl Handler {
         incidents: IncidentReporter,
         quarantine: Option<QuarantineStore>,
         quarantine_resources: QuarantineManager,
-        talk: Option<Arc<TalkManager>>,
+        rotector: Option<Arc<RotectorClient>>,
     ) -> Self {
         Self {
             config,
@@ -46,7 +46,7 @@ impl Handler {
             incidents,
             quarantine,
             quarantine_resources,
-            talk,
+            rotector,
         }
     }
 
@@ -78,11 +78,8 @@ impl Handler {
             .iter()
             .any(|user| user.id == ctx.cache.current_user().id);
         if self.config.is_trusted(message.author.id.get(), roles) {
-            if !is_edit {
-                let talk_handled = self.handle_talk_message(ctx, &message).await;
-                if mentions_hugh && !talk_handled {
-                    self.send_about(ctx, message.channel_id).await;
-                }
+            if !is_edit && mentions_hugh {
+                self.send_about(ctx, message.channel_id).await;
             }
             return;
         }
@@ -106,11 +103,8 @@ impl Handler {
             .state
             .inspect_message(&input, &self.config, Instant::now());
         if !decision.should_delete() {
-            if !is_edit {
-                let talk_handled = self.handle_talk_message(ctx, &message).await;
-                if mentions_hugh && !talk_handled {
-                    self.send_about(ctx, message.channel_id).await;
-                }
+            if !is_edit && mentions_hugh {
+                self.send_about(ctx, message.channel_id).await;
             }
             return;
         }
@@ -364,13 +358,6 @@ impl Handler {
             error!(?error, "failed to send Hugh introduction");
         }
     }
-
-    async fn handle_talk_message(&self, ctx: &Context, message: &Message) -> bool {
-        let Some(talk) = &self.talk else {
-            return false;
-        };
-        talk.handle_carson_message(ctx, message).await
-    }
 }
 
 #[async_trait]
@@ -473,7 +460,7 @@ impl EventHandler for Handler {
             self.quarantine.as_ref(),
             &self.quarantine_resources,
             &self.incidents,
-            self.talk.as_deref(),
+            self.rotector.as_deref(),
         )
         .await;
     }

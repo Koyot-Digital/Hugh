@@ -344,7 +344,8 @@ mod tests {
             new_accounts: crate::config::NewAccountConfig::default(),
             role_guard: RoleGuardConfig::default(),
             quarantine: crate::config::QuarantineConfig::default(),
-            talk: crate::config::TalkConfig::default(),
+            rotector: crate::config::RotectorConfig::default(),
+            permissions: crate::config::PermissionsConfig::default(),
         }
     }
 

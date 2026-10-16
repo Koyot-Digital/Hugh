@@ -32,9 +32,14 @@ flag), the reason, channel ID, and small structured evidence. Message bodies,
 URL paths or queries, email addresses, tokens, and attachment contents are not
 stored.
 
-The same case is delivered through the configured Discord webhook with direct
-user/channel references and readable durations. Mentions are disabled on
-webhook delivery, so a report does not ping its subject or moderator. Protect
+The same case is delivered through the configured Discord webhook as a card
+built for reading rather than parsing: the title states the outcome in plain
+English ("Case #42 · Message deleted · member timed out"), the description gives
+the reason, and the details block renders each piece of evidence with a human
+label, durations as "10 minutes", role IDs as role mentions, and empty or
+duplicated entries dropped. The JSONL record keeps the raw codes, so dashboards
+are unaffected. Mentions are disabled on webhook delivery, so a report does not
+ping its subject or moderator. Protect
 the file and webhook channel as moderation data, rotate the file using the
 host's normal log rotation, and set a suitable retention period. Webhook
 delivery failure is logged locally; it does not suppress enforcement. Case

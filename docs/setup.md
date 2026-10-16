@@ -79,7 +79,8 @@ Linux/macOS:
 ```text
 export DISCORD_TOKEN='replace-me'
 export HUGH_INCIDENT_WEBHOOK_URL='https://discord.com/api/webhooks/...'
-export OPENAI_API_KEY='replace-me'
+# Only while [rotector] is enabled:
+export HUGH_ROTECTOR_API_KEY='replace-me'
 cargo run --release -- --config config.toml
 ```
 
@@ -88,7 +89,8 @@ PowerShell:
 ```powershell
 $env:DISCORD_TOKEN = 'replace-me'
 $env:HUGH_INCIDENT_WEBHOOK_URL = 'https://discord.com/api/webhooks/...'
-$env:OPENAI_API_KEY = 'replace-me'
+# Only while [rotector] is enabled:
+$env:HUGH_ROTECTOR_API_KEY = 'replace-me'
 cargo run --release -- --config config.toml
 ```
 

@@ -115,12 +115,13 @@ impl IncidentReporter {
             error!(?error, "failed to persist security incident");
         }
         info!(
-            case_id = incident.case_id,
+            case = incident.case_id,
             kind = incident.kind,
-            action = incident.action,
-            subject_id = incident.subject.as_ref().map(|user| user.id),
-            moderator_id = incident.moderator.as_ref().map(|user| user.id),
-            "security incident"
+            subject = incident.subject.as_ref().map(|user| user.id),
+            moderator = incident.moderator.as_ref().map(|user| user.id),
+            "{} — {}",
+            action_phrase(&incident.action),
+            incident.reason
         );
 
         let message = ExecuteWebhook::new()
@@ -204,67 +205,221 @@ async fn next_case_id(path: &Path) -> Result<u64> {
 }
 
 fn incident_embed(incident: &Incident) -> CreateEmbed {
-    let action = title_case(&incident.action);
+    let headline = action_phrase(&incident.action);
     let mut embed = CreateEmbed::new()
-        .title(format!("Case #{} • {action}", incident.case_id))
+        .title(format!("Case #{} · {headline}", incident.case_id))
+        .description(format!("**Why:** {}", truncate(&incident.reason, 1_900)))
         .colour(action_colour(&incident.action));
 
     if let Some(subject) = &incident.subject {
-        let username = subject.display_name.as_ref().map_or_else(
-            || format!("@{}", subject.username),
-            |display| format!("@{}\n{}", subject.username, display),
+        let display = subject
+            .display_name
+            .as_ref()
+            .map_or_else(String::new, |display| format!(" · {display}"));
+        let sender = if subject.bot {
+            "\nAutomated sender"
+        } else {
+            ""
+        };
+        let who = format!(
+            "<@{id}>\n@{username}{display}\n`{id}`{sender}",
+            id = subject.id,
+            username = subject.username
         );
         embed = embed
-            .field("User", format!("<@{}>", subject.id), true)
-            .field("Username", truncate(&username, 1_024), true)
-            .field("Discord ID", format!("`{}`", subject.id), true)
+            .field("Member", truncate(&who, 1_024), true)
             .thumbnail(&subject.avatar_url);
     }
 
     let moderator = incident.moderator.as_ref().map_or_else(
-        || "Hugh • Automatic".to_owned(),
+        || "Hugh · automatic".to_owned(),
         |user| format!("<@{}>\n@{}", user.id, user.username),
     );
-    embed = embed
-        .field("Moderator", moderator, true)
-        .field("Action", action, true);
+    embed = embed.field("Handled by", moderator, true);
     if let Some(channel_id) = incident.channel_id {
-        embed = embed.field("Channel", format!("<#{channel_id}>\n`{channel_id}`"), true);
+        embed = embed.field("Channel", format!("<#{channel_id}>"), true);
     }
-    embed = embed.field("Reason", truncate(&incident.reason, 1_024), false);
 
-    let evidence = format_evidence(&incident.details);
-    if !evidence.is_empty() {
-        embed = embed.field("Evidence & context", truncate(&evidence, 1_024), false);
+    let details = format_evidence(&incident.details);
+    if !details.is_empty() {
+        embed = embed.field("Details", truncate(&details, 1_024), false);
     }
 
     let timestamp = Timestamp::from_unix_timestamp(incident.timestamp.timestamp())
         .unwrap_or_else(|_| Timestamp::now());
     embed
         .footer(CreateEmbedFooter::new(format!(
-            "Use Case #{} when adding moderator context • Hugh Security",
+            "{} · quote Case #{} in moderator notes",
+            title_case(&incident.kind),
             incident.case_id
         )))
         .timestamp(timestamp)
 }
 
+/// Plain-English headline for an outcome code, so a moderator reads what
+/// happened instead of decoding `message_deleted_timeout_failed`.
+fn action_phrase(action: &str) -> String {
+    match action {
+        "message_deleted" => "Message deleted",
+        "message_deleted_and_member_timed_out" => "Message deleted · member timed out",
+        "message_deleted_timeout_failed" => "Message deleted · timeout failed",
+        "member_timed_out_delete_failed" => "Member timed out · message still up",
+        "delete_failed" => "Message could not be deleted",
+        "enforcement_failed" => "Enforcement failed",
+        "raid_mode_enabled" => "Raid mode enabled",
+        "logged" => "Logged for review, nothing enforced",
+        "timed_out" => "Member timed out",
+        "kicked" => "Member kicked",
+        "roles_removed" => "Protected roles removed",
+        "role_removal_failed" => "Protected roles could not be removed",
+        "member_banished" => "Member quarantined",
+        "member_partially_banished" => "Member quarantined · roles left behind",
+        "member_released" => "Member released from quarantine",
+        "channel_locked" => "Channel locked",
+        "command_failed" => "Command failed",
+        "command_blocked" => "Command blocked",
+        "configuration_failed" => "Setup failed",
+        "rotector_match" => "Rotector flagged this account",
+        other => return title_case(other),
+    }
+    .to_owned()
+}
+
+/// Reading order for the details block: what happened, then the counts that
+/// explain it, then the bookkeeping identifiers.
+const DETAIL_ORDER: [&str; 24] = [
+    "source",
+    "command",
+    "target_user_id",
+    "lookup",
+    "target",
+    "verdict",
+    "reason_types",
+    "required_level",
+    "held_level",
+    "total_mentions",
+    "link_count",
+    "attachment_count",
+    "coordinated_users",
+    "blocked_domain",
+    "account_age_seconds",
+    "joins_in_window",
+    "window_seconds",
+    "raid_mode_seconds",
+    "timeout_seconds",
+    "timeout_skipped",
+    "stored_role_ids",
+    "restored_role_ids",
+    "removed_role_ids",
+    "message_id",
+];
+
 fn format_evidence(details: &BTreeMap<String, serde_json::Value>) -> String {
-    details
+    let mut lines: Vec<(usize, String)> = details
         .iter()
+        // The machine-readable reason codes repeat the "Why" line above.
         .filter(|(key, _)| key.as_str() != "reasons")
-        .map(|(key, value)| {
-            let label = title_case(key);
-            let value = match value {
-                serde_json::Value::Number(number) if key.ends_with("_seconds") => number
-                    .as_u64()
-                    .map_or_else(|| value.to_string(), human_duration),
-                serde_json::Value::String(value) => value.clone(),
-                _ => value.to_string(),
-            };
-            format!("**{label}:** `{}`", value.replace('`', "'"))
-        })
+        .filter_map(|(key, value)| format_detail(key, value).map(|line| (detail_rank(key), line)))
+        .collect();
+    lines.sort_by_key(|(rank, _)| *rank);
+    lines
+        .into_iter()
+        .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn detail_rank(key: &str) -> usize {
+    DETAIL_ORDER
+        .iter()
+        .position(|known| *known == key)
+        .unwrap_or(DETAIL_ORDER.len())
+}
+
+/// `None` hides the entry entirely: an empty list or a null is noise, not
+/// evidence.
+fn format_detail(key: &str, value: &serde_json::Value) -> Option<String> {
+    let rendered = match value {
+        serde_json::Value::Null => return None,
+        serde_json::Value::Bool(flag) => (if *flag { "Yes" } else { "No" }).to_owned(),
+        serde_json::Value::Number(number) if key.ends_with("_seconds") => number
+            .as_u64()
+            .map_or_else(|| number.to_string(), human_duration),
+        serde_json::Value::Number(number) if key.ends_with("_user_id") => number
+            .as_u64()
+            .map_or_else(|| number.to_string(), |id| format!("<@{id}> `{id}`")),
+        serde_json::Value::Number(number) if key.ends_with("_id") => format!("`{number}`"),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::String(text) => format_detail_text(key, text),
+        serde_json::Value::Array(items) if items.is_empty() => return None,
+        serde_json::Value::Array(items) => format_detail_list(key, items),
+        serde_json::Value::Object(_) => format!("`{value}`"),
+    };
+    Some(format!("**{}:** {rendered}", detail_label(key)))
+}
+
+fn format_detail_text(key: &str, text: &str) -> String {
+    let text = text.trim().replace('`', "'");
+    match key {
+        "source" => match text.as_str() {
+            "message_create" => "New message".to_owned(),
+            "message_edit" => "Edited message".to_owned(),
+            other => title_case(other),
+        },
+        "command" => format!("`/{text}`"),
+        "lookup" => title_case(&text),
+        "target" | "blocked_domain" => format!("`{text}`"),
+        _ => text,
+    }
+}
+
+fn format_detail_list(key: &str, items: &[serde_json::Value]) -> String {
+    const SHOWN: usize = 8;
+    let role_ids = key.ends_with("role_ids");
+    let mut rendered: Vec<String> = items
+        .iter()
+        .take(SHOWN)
+        .map(|item| match item.as_u64() {
+            Some(id) if role_ids => format!("<@&{id}>"),
+            Some(id) => format!("`{id}`"),
+            None => format!("`{item}`"),
+        })
+        .collect();
+    if items.len() > SHOWN {
+        rendered.push(format!("and {} more", items.len() - SHOWN));
+    }
+    format!("{} — {}", items.len(), rendered.join(", "))
+}
+
+fn detail_label(key: &str) -> String {
+    match key {
+        "source" => "Trigger",
+        "message_id" => "Message",
+        "total_mentions" => "Mentions",
+        "attachment_count" => "Attachments",
+        "link_count" => "Links",
+        "coordinated_users" => "Accounts posting the same text",
+        "timeout_seconds" => "Timeout",
+        "timeout_skipped" => "Timeout skipped",
+        "blocked_domain" => "Blocked domain",
+        "account_age_seconds" => "Account age",
+        "joins_in_window" => "Joins in the window",
+        "window_seconds" => "Join window",
+        "raid_mode_seconds" => "Raid mode lasts",
+        "stored_role_ids" => "Roles stored for recovery",
+        "restored_role_ids" => "Roles restored",
+        "removed_role_ids" => "Roles removed",
+        "failed_role_ids" => "Roles Hugh could not change",
+        "missing_role_ids" => "Deleted roles skipped",
+        "target_user_id" => "Target",
+        "required_level" => "Level required",
+        "held_level" => "Level held",
+        "reason_types" => "Finding types",
+        "lookup" => "Lookup",
+        "verdict" => "Verdict",
+        other => return title_case(other),
+    }
+    .to_owned()
 }
 
 fn human_duration(seconds: u64) -> String {
@@ -315,8 +470,10 @@ fn action_colour(action: &str) -> Colour {
         Colour::from_rgb(218, 55, 60)
     } else if action.contains("released") {
         Colour::from_rgb(35, 165, 90)
-    } else if action == "logged" {
+    } else if action == "logged" || action == "command_blocked" {
         Colour::from_rgb(240, 178, 50)
+    } else if action == "rotector_match" {
+        Colour::from_rgb(237, 110, 60)
     } else {
         Colour::from_rgb(237, 66, 69)
     }
@@ -366,10 +523,47 @@ mod tests {
         let details = BTreeMap::from([
             ("timeout_seconds".into(), serde_json::json!(600)),
             ("message_id".into(), serde_json::json!(123)),
+            ("source".into(), serde_json::json!("message_edit")),
+            ("total_mentions".into(), serde_json::json!(12)),
+            ("reasons".into(), serde_json::json!("mass_mention")),
+            ("failed_role_ids".into(), serde_json::json!([])),
+            ("stored_role_ids".into(), serde_json::json!([7, 8])),
         ]);
         let formatted = format_evidence(&details);
-        assert!(formatted.contains("Message ID"));
-        assert!(formatted.contains("10 minutes"));
+        let lines: Vec<&str> = formatted.lines().collect();
+
+        // Trigger first, bookkeeping identifiers last, nothing empty, and no
+        // duplicate of the reason codes already shown as "Why".
+        assert_eq!(lines[0], "**Trigger:** Edited message");
+        assert_eq!(lines[1], "**Mentions:** 12");
+        assert_eq!(lines[2], "**Timeout:** 10 minutes");
+        assert_eq!(lines[3], "**Roles stored for recovery:** 2 — <@&7>, <@&8>");
+        assert_eq!(lines[4], "**Message:** `123`");
+        assert_eq!(lines.len(), 5);
+        assert!(!formatted.contains("mass_mention"));
+    }
+
+    #[test]
+    fn long_lists_are_summarised() {
+        let ids: Vec<u64> = (1..=12).collect();
+        let details = BTreeMap::from([("removed_role_ids".into(), serde_json::json!(ids))]);
+        let formatted = format_evidence(&details);
+        assert!(formatted.starts_with("**Roles removed:** 12 — <@&1>,"));
+        assert!(formatted.ends_with("and 4 more"));
+    }
+
+    #[test]
+    fn outcome_codes_become_plain_english() {
+        assert_eq!(
+            action_phrase("message_deleted_and_member_timed_out"),
+            "Message deleted · member timed out"
+        );
+        assert_eq!(
+            action_phrase("member_released"),
+            "Member released from quarantine"
+        );
+        // Unmapped codes still read as words rather than snake_case.
+        assert_eq!(action_phrase("some_new_outcome"), "Some new outcome");
     }
 
     #[test]
@@ -394,24 +588,36 @@ mod tests {
             .insert("timeout_seconds".into(), serde_json::json!(600));
 
         let embed = serde_json::to_value(incident_embed(&incident)).unwrap();
-        assert!(embed["title"].as_str().unwrap().starts_with("Case #42"));
+        let title = embed["title"].as_str().unwrap();
+        assert_eq!(title, "Case #42 · Message deleted · member timed out");
+        assert_eq!(
+            embed["description"].as_str().unwrap(),
+            "**Why:** Mass mentions"
+        );
         let field_names = embed["fields"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|field| field["name"].as_str())
             .collect::<Vec<_>>();
-        for expected in [
-            "User",
-            "Username",
-            "Discord ID",
-            "Moderator",
-            "Action",
-            "Channel",
-            "Reason",
-            "Evidence & context",
-        ] {
-            assert!(field_names.contains(&expected));
-        }
+        assert_eq!(
+            field_names,
+            vec!["Member", "Handled by", "Channel", "Details"]
+        );
+        let member = embed["fields"][0]["value"].as_str().unwrap();
+        assert!(member.contains("<@9>"));
+        assert!(member.contains("@example · Example User"));
+        assert!(
+            embed["fields"][3]["value"]
+                .as_str()
+                .unwrap()
+                .contains("**Timeout:** 10 minutes")
+        );
+        assert!(
+            embed["footer"]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Message guard")
+        );
     }
 }

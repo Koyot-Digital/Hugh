@@ -17,14 +17,19 @@ The current core protects against:
 - self-elevation into protected roles;
 - reversible member quarantine with durable role snapshots;
 - automatic quarantine role/channel provisioning and server-wide isolation;
-- moderator-operated channel lockdowns.
+- moderator-operated channel lockdowns;
+- staff account-safety lookups through the Rotector API.
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
-exempted, all enforcement is limited to one guild, and significant actions are
-delivered as numbered, moderator-friendly webhook cases and written to both
-structured logs and an append-only JSONL incident log. Case reports include the
-user, username, Discord ID, moderator, reason, action, channel, and relevant
-evidence without retaining message bodies.
+exempted, command access is set per command across five staff tiers, all
+enforcement is limited to one guild, and significant actions are delivered as
+numbered webhook cases and written to both structured logs and an append-only
+JSONL incident log.
+
+Case reports are written to be read: the title states the outcome in plain
+English, the description gives the reason, and the details block labels every
+piece of evidence, renders durations as "10 minutes", shows role IDs as role
+mentions, and drops empty fields. Message bodies are never retained.
 
 ## Quick start
 
@@ -34,7 +39,8 @@ evidence without retaining message bodies.
 3. Create a private incident webhook, then enable the **Server Members Intent**
    and **Message Content Intent** in the Discord Developer Portal.
 4. Invite Hugh with the permissions listed in [the setup guide](docs/setup.md).
-5. Set `DISCORD_TOKEN`, `HUGH_INCIDENT_WEBHOOK_URL`, and `OPENAI_API_KEY`, then start the bot:
+5. Set `DISCORD_TOKEN` and `HUGH_INCIDENT_WEBHOOK_URL` (plus
+   `HUGH_ROTECTOR_API_KEY` if you enable `[rotector]`), then start the bot:
 
    ```text
    cargo run --release -- --config config.toml
@@ -55,13 +61,29 @@ file.
 - `/lock [channel] [reason]` locks the selected or current channel.
 - `/banish user [reason]` stores the member's roles and moves them into quarantine.
 - `/unbanish user [reason]` restores the stored roles and releases the member.
-- `/help` shows the in-Discord guide.
+- `/rotector …` runs staff account-safety lookups (see below).
+- `/help` shows the in-Discord guide, including the tier each command needs.
 - `/hugh` introduces the project and links to this repository.
-- `/talk length` starts an owner-only, API-backed conversation with Carson.
 
-`/talk` counts both bots' public messages toward `length`, uses 10 rotating
-icebreakers, and asks the OpenAI Responses API for each later Hugh reply using
-`gpt-5-nano` with a 96-token output limit.
+Each command's required tier — `everyone`, `helper`, `moderator`, `admin`, or
+`owner` — is set in `[permissions.commands]`, and tier membership is a list of
+roles and users per tier. A higher tier always satisfies a lower one. Left
+unconfigured, Hugh behaves as before and relies on Discord's own permission
+gating.
+
+With `[rotector]` enabled, staff can check accounts against the Rotector API:
+
+- `/rotector discord [user] [id]` — findings for a Discord account, plus linked
+  flagged Roblox accounts.
+- `/rotector roblox id` — findings for a Roblox account, with category,
+  reviewer, and record links.
+- `/rotector links id` — Discord accounts, tracked servers, and alts linked to
+  a Roblox account.
+- `/rotector group id` — findings for a Roblox group.
+- `/rotector sources` — which detection sources the key reports on.
+
+Lookups answer privately, send only the identifier being checked, and write a
+case log when a result comes back flagged.
 
 Mentioning Hugh also shows the short project introduction.
 

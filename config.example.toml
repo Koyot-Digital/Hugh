@@ -81,10 +81,39 @@ channel_name = "quarantine"
 role_name = "Quarantined"
 store_path = "data/quarantine.jsonl"
 
-[talk]
-enabled = true
-# Only this user can invoke /talk. Carson must be a Discord bot account.
-owner_user_id = "541551772288811009"
-carson_user_id = "1551781118246785055"
-# /talk length counts both Hugh's and Carson's public messages.
-max_messages = 50
+[rotector]
+# Staff account checks through the Rotector API. Requires HUGH_ROTECTOR_API_KEY.
+enabled = false
+base_url = "https://roscoe.rayward.app"
+# Locale for the status text Rotector composes, such as "es" or "zh-CN".
+language = "en"
+request_timeout_seconds = 10
+# Record a case log whenever a lookup comes back flagged.
+log_flagged_lookups = true
+
+[permissions]
+# Staff tiers, lowest to highest: helper < moderator < admin < owner. A member
+# in a higher tier satisfies every requirement below it, and anyone listed in
+# trusted_user_ids is treated as owner.
+#
+# While every list below is empty, Hugh keeps Discord's own permission gating
+# on its staff commands. Listing even one role or user switches that command to
+# tier checks, so a staff role needs no Discord moderation permissions.
+allow_discord_permissions = true
+helper_role_ids = []
+helper_user_ids = []
+moderator_role_ids = []
+moderator_user_ids = []
+admin_role_ids = []
+admin_user_ids = []
+owner_role_ids = []
+owner_user_ids = []
+
+# Required tier per command. Omitted commands keep the default shown here.
+[permissions.commands]
+help = "everyone"
+hugh = "everyone"
+rotector = "moderator"
+lock = "moderator"
+banish = "moderator"
+unbanish = "moderator"

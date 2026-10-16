@@ -1,10 +1,11 @@
 mod bot;
-mod chat;
 mod commands;
 mod config;
 mod detection;
 mod incident;
+mod lookup;
 mod quarantine;
+mod rotector;
 mod state;
 
 use std::{env, path::PathBuf, sync::Arc};
@@ -20,10 +21,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     bot::Handler,
-    chat::TalkManager,
     config::Config,
     incident::{IncidentReporter, IncidentSink},
     quarantine::{QuarantineManager, QuarantineStore},
+    rotector::RotectorClient,
     state::SecurityState,
 };
 
@@ -75,14 +76,18 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let talk = if config.talk.enabled {
-        let api_key = env::var("OPENAI_API_KEY").context(
-            "OPENAI_API_KEY is not set; it is required while the /talk command is enabled",
+    let rotector = if config.rotector.enabled {
+        let api_key = env::var("HUGH_ROTECTOR_API_KEY").context(
+            "HUGH_ROTECTOR_API_KEY is not set; it is required while [rotector] is enabled",
         )?;
         if api_key.trim().is_empty() {
-            bail!("OPENAI_API_KEY must not be empty while the /talk command is enabled");
+            bail!("HUGH_ROTECTOR_API_KEY must not be empty while [rotector] is enabled");
         }
-        Some(Arc::new(TalkManager::new(api_key, config.talk.clone())?))
+        info!(
+            base_url = config.rotector.base_url,
+            "Rotector lookups are enabled"
+        );
+        Some(Arc::new(RotectorClient::new(api_key, &config.rotector)?))
     } else {
         None
     };
@@ -92,7 +97,7 @@ async fn main() -> Result<()> {
         incidents,
         quarantine,
         QuarantineManager::new(),
-        talk,
+        rotector,
     );
 
     let intents = GatewayIntents::GUILDS
@@ -150,6 +155,13 @@ fn init_tracing() {
             .json()
             .init();
     } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        // Human-readable by default: the module path and span noise add nothing
+        // for an operator watching enforcement decisions scroll past.
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .with_ansi(true)
+            .compact()
+            .init();
     }
 }

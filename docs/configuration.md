@@ -134,7 +134,7 @@ restoration.
 | --- | --- |
 | `DISCORD_TOKEN` | Required bot token. |
 | `HUGH_INCIDENT_WEBHOOK_URL` | Required private Discord webhook URL for incidents. |
-| `OPENAI_API_KEY` | Required when `[talk].enabled = true`; used only for OpenAI Responses API calls. |
+| `HUGH_ROTECTOR_API_KEY` | Required when `[rotector].enabled = true`; sent as the bearer token on Rotector lookups. |
 | `HUGH_CONFIG` | Config path; overridden by `--config`. |
 | `RUST_LOG` | Log filter, such as `hugh=debug,serenity=warn`. |
 | `HUGH_LOG_FORMAT` | Set to `json` for structured process logs. |
@@ -142,31 +142,82 @@ restoration.
 Discord permits member timeouts up to 28 days; Hugh clamps values at that API
 limit.
 
-## `[talk]`
+## `[rotector]`
 
-- `enabled`: registers `/talk` and requires `OPENAI_API_KEY` at startup.
-- `owner_user_id`: the only Discord user allowed to invoke `/talk`.
-- `carson_user_id`: Carson's Discord bot user ID. Only messages from this bot
-  continue a conversation.
-- `max_messages`: upper bound accepted by `/talk length`; valid from 2 to 200.
+Rotector is a third-party service that flags Roblox and Discord accounts for
+predatory and inappropriate behaviour. When this section is enabled, Hugh
+registers the staff-only `/rotector` command and reads
+`HUGH_ROTECTOR_API_KEY` at startup.
 
-The requested length counts Hugh and Carson messages together. One conversation
-may run in a channel at a time, and an idle conversation expires after 10
-minutes. Hugh rotates through 10 built-in icebreakers, then calls the OpenAI
-Responses API with the fixed `gpt-5-nano` model and a 96-token output cap for
-each response. Conversation history is kept only in memory and is not written
-to incident logs.
+- `enabled`: registers `/rotector` and requires the API key.
+- `base_url`: API origin. Default: `https://roscoe.rayward.app`.
+- `language`: locale for the status text the API composes, such as `es` or
+  `zh-CN`. Unknown values fall back to English.
+- `request_timeout_seconds`: per-request timeout, from 1 to 60.
+- `log_flagged_lookups`: write a case log whenever a lookup returns a flagged
+  account, so a staff decision has a durable reference.
+
+Hugh sends nothing but the identifier a moderator asked about. Message content,
+member lists, and server metadata are never uploaded. Results answer privately
+to the moderator who ran the lookup:
+
+| Subcommand | Endpoint | Shows |
+| --- | --- | --- |
+| `/rotector discord [user] [id]` | `/v2/lookup/rotector/discord/user/{id}` | Verdict, findings, linked flagged Roblox accounts. |
+| `/rotector roblox id` | `/v2/lookup/rotector/roblox/user/{id}` | Verdict, category, findings, findings awaiting review, reviewer, record links. |
+| `/rotector links id` | `/v2/lookup/rotector/roblox/user/{id}/discord` | Linked Discord accounts, tracked servers, and known alts. |
+| `/rotector group id` | `/v2/lookup/rotector/roblox/group/{id}` | Group verdict and findings. |
+| `/rotector sources` | `/v2/providers` | Detection sources enabled for Hugh's key. |
+
+Verdicts come from the API's `flagType` field: no findings, flagged, confirmed,
+being processed, provisional, mixed, past offender, redacted, or awaiting human
+review. Only the first six count as findings, and only a finding produces a
+case log. A `404` is reported as "no record", which is not a clearance: the
+account may simply never have been analysed. Hugh does not screen joins against
+Rotector; a moderator decides what to do with every result.
+
+## `[permissions]`
+
+Command access uses five tiers: `everyone`, `helper`, `moderator`, `admin`, and
+`owner`. A member who satisfies a higher tier satisfies every tier below it, and
+anyone in `trusted_user_ids` counts as `owner`.
+
+- `helper_role_ids`, `helper_user_ids`, `moderator_role_ids`,
+  `moderator_user_ids`, `admin_role_ids`, `admin_user_ids`, `owner_role_ids`,
+  and `owner_user_ids`: tier membership.
+- `allow_discord_permissions`: when true (the default), Discord's own
+  Administrator permission grants `admin`, and any of Moderate Members, Manage
+  Roles, Manage Channels, Manage Messages, Kick Members, Ban Members, or Manage
+  Server grants `moderator`.
+- `[permissions.commands]`: the tier each command requires. Unlisted commands
+  keep their default, and an unknown command name stops startup.
+
+| Command | Default tier |
+| --- | --- |
+| `/help`, `/hugh` | `everyone` |
+| `/rotector` | `moderator` |
+| `/lock`, `/banish`, `/unbanish` | `moderator` |
+
+While every tier list is empty, Hugh keeps Discord's own command gating on its
+staff commands, so clients hide them from members without the matching Discord
+permissions. Listing even one role or user in a tier that can satisfy a command
+removes that Discord-side gate for it: the command becomes visible and Hugh
+enforces the tier itself. This is what lets a plain staff role use `/banish`
+without holding Manage Roles.
+
+A refused command answers privately with the tier it needs and the tier the
+member holds, and is recorded as a `permission_denied` case so repeated
+attempts at staff tooling stay visible.
 
 ## Slash commands
 
-Hugh registers commands in the configured guild at startup. `/lock`, `/banish`,
-and `/unbanish` have Discord permission defaults and repeat authorization
-checks inside Hugh. Each accepts an optional `reason` (up to 512 characters)
-that is preserved in its case log. Members in `trusted_user_ids` may also use
-them.
+Hugh registers commands in the configured guild at startup, gated as described
+under `[permissions]`. `/lock`, `/banish`, and `/unbanish` each accept an
+optional `reason` (up to 512 characters) that is preserved in its case log.
+Members in `trusted_user_ids` may always use them.
 
-`/talk` does not use moderator permissions or `trusted_user_ids`; it checks the
-invoking user against `talk.owner_user_id` inside the command handler.
+Hugh re-checks the required tier inside its own handler on every invocation, so
+a change to Discord permissions never bypasses `[permissions]`.
 
 `/lock` preserves the channel's existing `@everyone` overwrite and adds denies
 for sending, creating threads, and reacting. This release intentionally does

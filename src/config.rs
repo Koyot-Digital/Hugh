@@ -1,8 +1,12 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tokio::fs;
+use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +36,9 @@ pub struct Config {
     #[serde(default)]
     pub quarantine: QuarantineConfig,
     #[serde(default)]
-    pub talk: TalkConfig,
+    pub rotector: RotectorConfig,
+    #[serde(default)]
+    pub permissions: PermissionsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -226,23 +232,150 @@ impl Default for QuarantineConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TalkConfig {
+pub struct RotectorConfig {
     pub enabled: bool,
-    #[serde(deserialize_with = "snowflake")]
-    pub owner_user_id: u64,
-    #[serde(deserialize_with = "snowflake")]
-    pub carson_user_id: u64,
-    pub max_messages: usize,
+    pub base_url: String,
+    /// Locale used for the provider-composed status and header text.
+    pub language: String,
+    pub request_timeout_seconds: u64,
+    /// Write a case log whenever a staff lookup returns a flagged account.
+    pub log_flagged_lookups: bool,
 }
 
-impl Default for TalkConfig {
+impl Default for RotectorConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            owner_user_id: 541_551_772_288_811_009,
-            carson_user_id: 1_551_781_118_246_785_055,
-            max_messages: 50,
+            enabled: false,
+            base_url: "https://roscoe.rayward.app".to_owned(),
+            language: "en".to_owned(),
+            request_timeout_seconds: 10,
+            log_flagged_lookups: true,
         }
+    }
+}
+
+/// Staff tiers, ordered from least to most privileged. A member who satisfies a
+/// higher tier also satisfies every tier below it.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessLevel {
+    #[default]
+    Everyone,
+    Helper,
+    Moderator,
+    Admin,
+    Owner,
+}
+
+impl AccessLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Everyone => "everyone",
+            Self::Helper => "helper",
+            Self::Moderator => "moderator",
+            Self::Admin => "admin",
+            Self::Owner => "owner",
+        }
+    }
+}
+
+/// Discord-granted power held by the invoking member, used only when
+/// `permissions.allow_discord_permissions` is enabled.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiscordPowers {
+    pub administrator: bool,
+    pub moderator: bool,
+}
+
+/// Commands Hugh knows about, with the tier each one needs by default.
+pub const COMMAND_LEVELS: [(&str, AccessLevel); 6] = [
+    ("help", AccessLevel::Everyone),
+    ("hugh", AccessLevel::Everyone),
+    ("rotector", AccessLevel::Moderator),
+    ("lock", AccessLevel::Moderator),
+    ("banish", AccessLevel::Moderator),
+    ("unbanish", AccessLevel::Moderator),
+];
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PermissionsConfig {
+    /// Let Discord permissions stand in for tier membership: Administrator
+    /// grants `admin`, and the moderation permissions grant `moderator`.
+    pub allow_discord_permissions: bool,
+    #[serde(deserialize_with = "snowflakes")]
+    pub helper_role_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub helper_user_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub moderator_role_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub moderator_user_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub admin_role_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub admin_user_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub owner_role_ids: HashSet<u64>,
+    #[serde(deserialize_with = "snowflakes")]
+    pub owner_user_ids: HashSet<u64>,
+    /// Command name to required tier. Unlisted commands keep their default.
+    pub commands: BTreeMap<String, AccessLevel>,
+}
+
+impl Default for PermissionsConfig {
+    fn default() -> Self {
+        Self {
+            allow_discord_permissions: true,
+            helper_role_ids: HashSet::new(),
+            helper_user_ids: HashSet::new(),
+            moderator_role_ids: HashSet::new(),
+            moderator_user_ids: HashSet::new(),
+            admin_role_ids: HashSet::new(),
+            admin_user_ids: HashSet::new(),
+            owner_role_ids: HashSet::new(),
+            owner_user_ids: HashSet::new(),
+            commands: BTreeMap::new(),
+        }
+    }
+}
+
+impl PermissionsConfig {
+    const fn tiers(&self) -> [(AccessLevel, &HashSet<u64>, &HashSet<u64>); 4] {
+        [
+            (
+                AccessLevel::Helper,
+                &self.helper_role_ids,
+                &self.helper_user_ids,
+            ),
+            (
+                AccessLevel::Moderator,
+                &self.moderator_role_ids,
+                &self.moderator_user_ids,
+            ),
+            (
+                AccessLevel::Admin,
+                &self.admin_role_ids,
+                &self.admin_user_ids,
+            ),
+            (
+                AccessLevel::Owner,
+                &self.owner_role_ids,
+                &self.owner_user_ids,
+            ),
+        ]
+    }
+
+    /// True when at least one tier that satisfies `level` lists explicit roles
+    /// or users. Hugh then stops relying on Discord's own command gating so the
+    /// configured staff can see the command whatever permissions they hold.
+    #[must_use]
+    pub fn grants_configured(&self, level: AccessLevel) -> bool {
+        self.tiers()
+            .into_iter()
+            .filter(|(tier, _, _)| *tier >= level)
+            .any(|(_, roles, users)| !roles.is_empty() || !users.is_empty())
     }
 }
 
@@ -340,18 +473,82 @@ impl Config {
                 bail!("the quarantine role cannot be trusted or protected");
             }
         }
-        if self.talk.enabled {
-            if self.talk.owner_user_id == 0 {
-                bail!("talk.owner_user_id must be a non-zero Discord ID");
-            }
-            if self.talk.carson_user_id == 0 {
-                bail!("talk.carson_user_id must be a non-zero Discord ID");
-            }
-            if !(2..=200).contains(&self.talk.max_messages) {
-                bail!("talk.max_messages must be between 2 and 200");
+        self.validate_rotector()?;
+        self.validate_permissions()?;
+        Ok(())
+    }
+
+    fn validate_rotector(&self) -> Result<()> {
+        if !self.rotector.enabled {
+            return Ok(());
+        }
+        let base = Url::parse(self.rotector.base_url.trim())
+            .context("rotector.base_url must be a valid URL")?;
+        if !matches!(base.scheme(), "http" | "https") {
+            bail!("rotector.base_url must use http or https");
+        }
+        if base.cannot_be_a_base() || base.host_str().is_none() {
+            bail!("rotector.base_url must include a host, such as https://roscoe.rayward.app");
+        }
+        let language = self.rotector.language.trim();
+        if language.is_empty() || language.len() > 16 {
+            bail!("rotector.language must contain 1 to 16 characters, such as \"en\"");
+        }
+        if !(1..=60).contains(&self.rotector.request_timeout_seconds) {
+            bail!("rotector.request_timeout_seconds must be between 1 and 60");
+        }
+        Ok(())
+    }
+
+    fn validate_permissions(&self) -> Result<()> {
+        for command in self.permissions.commands.keys() {
+            if !COMMAND_LEVELS.iter().any(|(name, _)| name == command) {
+                let known = COMMAND_LEVELS
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!("permissions.commands has no command named {command:?}; known: {known}");
             }
         }
         Ok(())
+    }
+
+    /// The tier `command` requires, from configuration or its built-in default.
+    #[must_use]
+    pub fn required_level(&self, command: &str) -> AccessLevel {
+        self.permissions
+            .commands
+            .get(command)
+            .copied()
+            .unwrap_or_else(|| {
+                COMMAND_LEVELS
+                    .iter()
+                    .find(|(name, _)| *name == command)
+                    .map_or(AccessLevel::Admin, |(_, level)| *level)
+            })
+    }
+
+    /// The highest tier this member satisfies.
+    #[must_use]
+    pub fn access_level(&self, user_id: u64, roles: &[u64], powers: DiscordPowers) -> AccessLevel {
+        if self.trusted_user_ids.contains(&user_id) {
+            return AccessLevel::Owner;
+        }
+        let mut level = AccessLevel::Everyone;
+        for (tier, role_ids, user_ids) in self.permissions.tiers() {
+            if user_ids.contains(&user_id) || roles.iter().any(|role| role_ids.contains(role)) {
+                level = level.max(tier);
+            }
+        }
+        if self.permissions.allow_discord_permissions {
+            if powers.administrator {
+                level = level.max(AccessLevel::Admin);
+            } else if powers.moderator {
+                level = level.max(AccessLevel::Moderator);
+            }
+        }
+        level
     }
 
     #[must_use]
@@ -469,6 +666,99 @@ role_id = "2""#,
         .unwrap();
         config.role_guard.enabled = false;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn configured_tiers_outrank_discord_permissions() {
+        let config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[role_guard]
+enabled = false
+
+[permissions]
+moderator_role_ids = ["50"]
+helper_user_ids = ["7"]
+
+[permissions.commands]
+lock = "admin"
+rotector = "helper""#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+
+        let none = DiscordPowers::default();
+        assert_eq!(config.access_level(3, &[], none), AccessLevel::Everyone);
+        assert_eq!(config.access_level(7, &[], none), AccessLevel::Helper);
+        assert_eq!(config.access_level(3, &[50], none), AccessLevel::Moderator);
+        assert_eq!(
+            config.access_level(
+                3,
+                &[],
+                DiscordPowers {
+                    administrator: true,
+                    moderator: false
+                }
+            ),
+            AccessLevel::Admin
+        );
+
+        assert_eq!(config.required_level("lock"), AccessLevel::Admin);
+        assert_eq!(config.required_level("rotector"), AccessLevel::Helper);
+        assert_eq!(config.required_level("banish"), AccessLevel::Moderator);
+        assert_eq!(config.required_level("help"), AccessLevel::Everyone);
+        assert!(config.permissions.grants_configured(AccessLevel::Moderator));
+        assert!(!config.permissions.grants_configured(AccessLevel::Admin));
+    }
+
+    #[test]
+    fn trusted_users_reach_the_highest_tier() {
+        let config: Config = toml::from_str(
+            r#"guild_id = "1"
+trusted_user_ids = ["9"]
+
+[role_guard]
+enabled = false"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.access_level(9, &[], DiscordPowers::default()),
+            AccessLevel::Owner
+        );
+    }
+
+    #[test]
+    fn unknown_command_names_are_rejected() {
+        let config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[role_guard]
+enabled = false
+
+[permissions.commands]
+lockdown = "admin""#,
+        )
+        .unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rotector_requires_a_usable_base_url() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[role_guard]
+enabled = false
+
+[rotector]
+enabled = true
+base_url = "roscoe.rayward.app""#,
+        )
+        .unwrap();
+        assert!(config.validate().is_err());
+
+        config.rotector.base_url = "https://roscoe.rayward.app".to_owned();
+        assert!(config.validate().is_ok());
     }
 
     #[test]
