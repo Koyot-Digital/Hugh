@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result, bail};
 use serenity::{
     all::{
         ButtonStyle, Colour, CommandDataOption, CommandInteraction, CommandOptionType,
-        ComponentInteraction, Context, User, UserId,
+        ComponentInteraction, Context, ReactionType, User, UserId,
     },
     builder::{
         CreateActionRow, CreateButton, CreateCommand, CreateCommandOption, CreateEmbed,
@@ -255,15 +255,16 @@ impl Outcome {
     }
 
     fn pin_button(&self, config: &Config) -> CreateActionRow {
-        CreateActionRow::Buttons(vec![
-            CreateButton::new(format!("{PIN_ID}:{}:{}", self.lookup, self.target))
-                .label(
-                    format!("{} Pin to mod log", config.icon("case"))
-                        .trim()
-                        .to_owned(),
-                )
-                .style(ButtonStyle::Secondary),
-        ])
+        let mut button = CreateButton::new(format!("{PIN_ID}:{}:{}", self.lookup, self.target))
+            .label("Pin to mod log")
+            .style(ButtonStyle::Secondary);
+        // A button label is plain text: emoji markup belongs in the separate
+        // emoji field, or `<:case:1234>` would be printed verbatim. An icon
+        // Discord cannot parse is simply left off the button.
+        if let Ok(emoji) = ReactionType::try_from(config.icon("case").to_owned()) {
+            button = button.emoji(emoji);
+        }
+        CreateActionRow::Buttons(vec![button])
     }
 
     fn incident(&self, config: &Config) -> Option<Incident> {
@@ -1022,7 +1023,26 @@ mod tests {
         let button = &row["components"][0];
         assert_eq!(button["custom_id"], "check_pin:roblox_user:77");
         assert!(is_pin_button(button["custom_id"].as_str().unwrap()));
-        assert!(button["label"].as_str().unwrap().contains("Pin to mod log"));
+        assert_eq!(button["label"].as_str().unwrap(), "Pin to mod log");
+        // The fallback icon is a unicode emoji, so it parses into the button's
+        // own emoji field rather than being printed in the label.
+        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "🗂️");
+
+        let custom: Config = toml::from_str(
+            "guild_id = \"1\"
+
+[icons]
+case = \"<:case:1560745728769523902>\"",
+        )
+        .unwrap();
+        let row = serde_json::to_value(outcome.pin_button(&custom)).unwrap();
+        let button = &row["components"][0];
+        assert_eq!(button["label"].as_str().unwrap(), "Pin to mod log");
+        assert_eq!(
+            button["emoji"]["id"].as_str().unwrap(),
+            "1560745728769523902"
+        );
+        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "case");
     }
 
     #[test]
