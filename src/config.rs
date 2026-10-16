@@ -37,6 +37,11 @@ pub struct Config {
     pub quarantine: QuarantineConfig,
     #[serde(default)]
     pub rotector: RotectorConfig,
+    /// Icon overrides for case and lookup cards, keyed by the names in
+    /// [`ICONS`]. Values are plain emoji or Discord custom emoji such as
+    /// `<:shield_alert:123456789012345678>`.
+    #[serde(default)]
+    pub icons: BTreeMap<String, String>,
     #[serde(default)]
     pub permissions: PermissionsConfig,
 }
@@ -288,11 +293,42 @@ pub struct DiscordPowers {
     pub moderator: bool,
 }
 
+/// Every icon slot Hugh renders, with the plain-emoji fallback used when the
+/// operator has not uploaded a matching custom emoji. Keys are stable; the
+/// Lucide icon each one is modelled on is noted in `docs/configuration.md`.
+pub const ICONS: [(&str, &str); 25] = [
+    ("case", "🗂️"),
+    ("reason", "📝"),
+    ("details", "🔎"),
+    ("member", "👤"),
+    ("moderator", "🛡️"),
+    ("channel", "#️⃣"),
+    ("deleted", "🗑️"),
+    ("timeout", "⏳"),
+    ("kicked", "🚪"),
+    ("raid", "🚨"),
+    ("join", "🧍"),
+    ("role", "🎭"),
+    ("quarantine", "🔒"),
+    ("release", "🔓"),
+    ("lock", "🔐"),
+    ("denied", "⛔"),
+    ("failed", "❗"),
+    ("flagged", "⚠️"),
+    ("safe", "✅"),
+    ("review", "🕓"),
+    ("unknown", "❔"),
+    ("roblox", "🎮"),
+    ("discord", "💬"),
+    ("group", "👥"),
+    ("source", "📡"),
+];
+
 /// Commands Hugh knows about, with the tier each one needs by default.
 pub const COMMAND_LEVELS: [(&str, AccessLevel); 6] = [
     ("help", AccessLevel::Everyone),
     ("hugh", AccessLevel::Everyone),
-    ("rotector", AccessLevel::Moderator),
+    ("check", AccessLevel::Moderator),
     ("lock", AccessLevel::Moderator),
     ("banish", AccessLevel::Moderator),
     ("unbanish", AccessLevel::Moderator),
@@ -475,7 +511,37 @@ impl Config {
         }
         self.validate_rotector()?;
         self.validate_permissions()?;
+        self.validate_icons()?;
         Ok(())
+    }
+
+    fn validate_icons(&self) -> Result<()> {
+        for (key, value) in &self.icons {
+            if !ICONS.iter().any(|(known, _)| known == key) {
+                bail!("icons has no slot named {key:?}; see docs/configuration.md for the list");
+            }
+            let value = value.trim();
+            if value.is_empty() || value.chars().count() > 64 {
+                bail!("icons.{key} must contain 1 to 64 characters");
+            }
+        }
+        Ok(())
+    }
+
+    /// The emoji for an icon slot: the operator's override, else the built-in
+    /// fallback. An unknown slot renders as nothing rather than breaking a card.
+    #[must_use]
+    pub fn icon(&self, slot: &str) -> &str {
+        self.icons
+            .get(slot)
+            .map(|value| value.trim())
+            .or_else(|| {
+                ICONS
+                    .iter()
+                    .find(|(known, _)| *known == slot)
+                    .map(|(_, fallback)| *fallback)
+            })
+            .unwrap_or_default()
     }
 
     fn validate_rotector(&self) -> Result<()> {
@@ -682,7 +748,7 @@ helper_user_ids = ["7"]
 
 [permissions.commands]
 lock = "admin"
-rotector = "helper""#,
+check = "helper""#,
         )
         .unwrap();
         config.validate().unwrap();
@@ -704,7 +770,7 @@ rotector = "helper""#,
         );
 
         assert_eq!(config.required_level("lock"), AccessLevel::Admin);
-        assert_eq!(config.required_level("rotector"), AccessLevel::Helper);
+        assert_eq!(config.required_level("check"), AccessLevel::Helper);
         assert_eq!(config.required_level("banish"), AccessLevel::Moderator);
         assert_eq!(config.required_level("help"), AccessLevel::Everyone);
         assert!(config.permissions.grants_configured(AccessLevel::Moderator));

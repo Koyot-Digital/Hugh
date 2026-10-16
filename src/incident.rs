@@ -5,7 +5,9 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serenity::{
     all::{Colour, Http, Timestamp, User, Webhook},
-    builder::{CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, ExecuteWebhook},
+    builder::{
+        CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, ExecuteWebhook,
+    },
 };
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -13,6 +15,8 @@ use tokio::{
     sync::Mutex,
 };
 use tracing::{error, info, warn};
+
+use crate::config::Config;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UserSnapshot {
@@ -95,15 +99,31 @@ pub struct IncidentSink {
 pub struct IncidentReporter {
     sink: IncidentSink,
     webhook: Webhook,
+    config: Arc<Config>,
 }
 
 impl IncidentReporter {
     #[must_use]
-    pub const fn new(sink: IncidentSink, webhook: Webhook) -> Self {
-        Self { sink, webhook }
+    pub const fn new(sink: IncidentSink, webhook: Webhook, config: Arc<Config>) -> Self {
+        Self {
+            sink,
+            webhook,
+            config,
+        }
     }
 
-    pub async fn report(&self, http: &Http, mut incident: Incident) {
+    pub async fn report(&self, http: &Http, incident: Incident) -> u64 {
+        self.report_with(http, incident, Vec::new()).await
+    }
+
+    /// Records the case and delivers it, with `attached` cards shown beneath the
+    /// case header. Returns the durable case number.
+    pub async fn report_with(
+        &self,
+        http: &Http,
+        mut incident: Incident,
+        attached: Vec<CreateEmbed>,
+    ) -> u64 {
         incident.actor_id = incident.actor_id.or_else(|| {
             incident
                 .moderator
@@ -124,10 +144,13 @@ impl IncidentReporter {
             incident.reason
         );
 
+        let mut embeds = vec![incident_embed(&incident, &self.config)];
+        // Discord accepts ten embeds per message; the case header takes one.
+        embeds.extend(attached.into_iter().take(9));
         let message = ExecuteWebhook::new()
             .username("Hugh Security")
             .allowed_mentions(CreateAllowedMentions::new())
-            .embed(incident_embed(&incident));
+            .embeds(embeds);
         if let Err(error) = self.webhook.execute(http, false, message).await {
             warn!(
                 case_id = incident.case_id,
@@ -135,6 +158,7 @@ impl IncidentReporter {
                 "failed to deliver incident webhook"
             );
         }
+        incident.case_id
     }
 }
 
@@ -204,45 +228,71 @@ async fn next_case_id(path: &Path) -> Result<u64> {
     Ok(last.saturating_add(1).max(1))
 }
 
-fn incident_embed(incident: &Incident) -> CreateEmbed {
+fn incident_embed(incident: &Incident, config: &Config) -> CreateEmbed {
     let headline = action_phrase(&incident.action);
     let mut embed = CreateEmbed::new()
-        .title(format!("Case #{} · {headline}", incident.case_id))
-        .description(format!("**Why:** {}", truncate(&incident.reason, 1_900)))
+        .title(format!(
+            "{} Case #{} · {headline}",
+            config.icon(action_icon(&incident.action)),
+            incident.case_id
+        ))
         .colour(action_colour(&incident.action));
 
-    if let Some(subject) = &incident.subject {
-        let display = subject
-            .display_name
-            .as_ref()
-            .map_or_else(String::new, |display| format!(" · {display}"));
-        let sender = if subject.bot {
-            "\nAutomated sender"
-        } else {
-            ""
-        };
-        let who = format!(
-            "<@{id}>\n@{username}{display}\n`{id}`{sender}",
-            id = subject.id,
-            username = subject.username
+    // The subject's face is the fastest thing to recognise in a busy mod log,
+    // so it leads the card; with no subject the responsible moderator does.
+    let portrait = incident.subject.as_ref().or(incident.moderator.as_ref());
+    if let Some(user) = portrait {
+        let name = user.display_name.as_ref().map_or_else(
+            || format!("@{}", user.username),
+            |display| format!("@{} · {display}", user.username),
         );
-        embed = embed
-            .field("Member", truncate(&who, 1_024), true)
-            .thumbnail(&subject.avatar_url);
+        let mut author = CreateEmbedAuthor::new(truncate(&name, 256));
+        if !user.avatar_url.is_empty() {
+            author = author.icon_url(&user.avatar_url);
+        }
+        embed = embed.author(author);
+    }
+    if let Some(subject) = &incident.subject
+        && !subject.avatar_url.is_empty()
+    {
+        embed = embed.thumbnail(&subject.avatar_url);
     }
 
-    let moderator = incident.moderator.as_ref().map_or_else(
-        || "Hugh · automatic".to_owned(),
-        |user| format!("<@{}>\n@{}", user.id, user.username),
-    );
-    embed = embed.field("Handled by", moderator, true);
-    if let Some(channel_id) = incident.channel_id {
-        embed = embed.field("Channel", format!("<#{channel_id}>"), true);
+    // One line of clickable references beats three near-empty inline fields.
+    let mut references = Vec::new();
+    if let Some(subject) = &incident.subject {
+        let tag = if subject.bot { " *(app)*" } else { "" };
+        references.push(format!("{} <@{}>{tag}", config.icon("member"), subject.id));
     }
+    if let Some(channel_id) = incident.channel_id {
+        references.push(format!("{} <#{channel_id}>", config.icon("channel")));
+    }
+    references.push(incident.moderator.as_ref().map_or_else(
+        || format!("{} Hugh · automatic", config.icon("moderator")),
+        |user| format!("{} <@{}>", config.icon("moderator"), user.id),
+    ));
+
+    embed = embed.description(format!(
+        "{} **{}**\n{}",
+        config.icon("reason"),
+        truncate(&incident.reason, 1_500),
+        references.join("  ·  ")
+    ));
 
     let details = format_evidence(&incident.details);
     if !details.is_empty() {
-        embed = embed.field("Details", truncate(&details, 1_024), false);
+        embed = embed.field(
+            format!("{} Details", config.icon("details")),
+            truncate(&details, 1_024),
+            false,
+        );
+    }
+    if let Some(subject) = &incident.subject {
+        embed = embed.field(
+            format!("{} Discord ID", config.icon("member")),
+            format!("`{}`", subject.id),
+            true,
+        );
     }
 
     let timestamp = Timestamp::from_unix_timestamp(incident.timestamp.timestamp())
@@ -254,6 +304,28 @@ fn incident_embed(incident: &Incident) -> CreateEmbed {
             incident.case_id
         )))
         .timestamp(timestamp)
+}
+
+/// Icon slot for an outcome, so the card's leading glyph says at a glance
+/// whether something was deleted, timed out, quarantined, or merely logged.
+fn action_icon(action: &str) -> &'static str {
+    if action.contains("failed") || action.contains("partial") {
+        return "failed";
+    }
+    match action {
+        "message_deleted" | "delete_failed" => "deleted",
+        "message_deleted_and_member_timed_out" | "timed_out" => "timeout",
+        "kicked" => "kicked",
+        "raid_mode_enabled" => "raid",
+        "logged" => "review",
+        "roles_removed" => "role",
+        "member_banished" => "quarantine",
+        "member_released" => "release",
+        "channel_locked" => "lock",
+        "command_blocked" => "denied",
+        "rotector_match" | "lookup_pinned" => "flagged",
+        _ => "case",
+    }
 }
 
 /// Plain-English headline for an outcome code, so a moderator reads what
@@ -280,6 +352,7 @@ fn action_phrase(action: &str) -> String {
         "command_blocked" => "Command blocked",
         "configuration_failed" => "Setup failed",
         "rotector_match" => "Rotector flagged this account",
+        "lookup_pinned" => "Lookup pinned to the mod log",
         other => return title_case(other),
     }
     .to_owned()
@@ -587,32 +660,47 @@ mod tests {
             .details
             .insert("timeout_seconds".into(), serde_json::json!(600));
 
-        let embed = serde_json::to_value(incident_embed(&incident)).unwrap();
-        let title = embed["title"].as_str().unwrap();
-        assert_eq!(title, "Case #42 · Message deleted · member timed out");
+        let config: Config = toml::from_str("guild_id = \"1\"").unwrap();
+        let embed = serde_json::to_value(incident_embed(&incident, &config)).unwrap();
+
+        // The outcome's icon leads the title, so a scanning moderator sees the
+        // kind of action before reading a word.
         assert_eq!(
-            embed["description"].as_str().unwrap(),
-            "**Why:** Mass mentions"
+            embed["title"].as_str().unwrap(),
+            "⏳ Case #42 · Message deleted · member timed out"
         );
+
+        // The subject's avatar appears twice over: as the author glyph and the
+        // thumbnail.
+        let avatar = "https://cdn.discordapp.com/embed/avatars/0.png";
+        assert_eq!(
+            embed["author"]["name"].as_str().unwrap(),
+            "@example · Example User"
+        );
+        assert_eq!(embed["author"]["icon_url"].as_str().unwrap(), avatar);
+        assert_eq!(embed["thumbnail"]["url"].as_str().unwrap(), avatar);
+
+        // Reason plus every clickable reference on one line, not three fields.
+        let description = embed["description"].as_str().unwrap();
+        assert_eq!(
+            description,
+            "📝 **Mass mentions**\n👤 <@9>  ·  #️⃣ <#7>  ·  🛡️ Hugh · automatic"
+        );
+
         let field_names = embed["fields"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|field| field["name"].as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            field_names,
-            vec!["Member", "Handled by", "Channel", "Details"]
-        );
-        let member = embed["fields"][0]["value"].as_str().unwrap();
-        assert!(member.contains("<@9>"));
-        assert!(member.contains("@example · Example User"));
+        assert_eq!(field_names, vec!["🔎 Details", "👤 Discord ID"]);
         assert!(
-            embed["fields"][3]["value"]
+            embed["fields"][0]["value"]
                 .as_str()
                 .unwrap()
                 .contains("**Timeout:** 10 minutes")
         );
+        assert_eq!(embed["fields"][1]["value"].as_str().unwrap(), "`9`");
         assert!(
             embed["footer"]["text"]
                 .as_str()

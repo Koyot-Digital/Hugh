@@ -26,10 +26,12 @@ enforcement is limited to one guild, and significant actions are delivered as
 numbered webhook cases and written to both structured logs and an append-only
 JSONL incident log.
 
-Case reports are written to be read: the title states the outcome in plain
-English, the description gives the reason, and the details block labels every
-piece of evidence, renders durations as "10 minutes", shows role IDs as role
-mentions, and drops empty fields. Message bodies are never retained.
+Case reports are written to be read: an icon and plain-English outcome lead the
+title, the subject's avatar anchors the card, every clickable reference sits on
+one line, and the details block labels each piece of evidence, renders durations
+as "10 minutes", shows role IDs as role mentions, and drops empty fields. Icons
+are configurable per slot, so a server can swap in its own Lucide-style emoji.
+Message bodies are never retained.
 
 ## Quick start
 
@@ -61,7 +63,7 @@ file.
 - `/lock [channel] [reason]` locks the selected or current channel.
 - `/banish user [reason]` stores the member's roles and moves them into quarantine.
 - `/unbanish user [reason]` restores the stored roles and releases the member.
-- `/rotector …` runs staff account-safety lookups (see below).
+- `/check …` runs staff account-safety lookups (see below).
 - `/help` shows the in-Discord guide, including the tier each command needs.
 - `/hugh` introduces the project and links to this repository.
 
@@ -73,17 +75,19 @@ gating.
 
 With `[rotector]` enabled, staff can check accounts against the Rotector API:
 
-- `/rotector discord [user] [id]` — findings for a Discord account, plus linked
+- `/check discord [user] [id]` — findings for a Discord account, plus linked
   flagged Roblox accounts.
-- `/rotector roblox id` — findings for a Roblox account, with category,
+- `/check roblox id` — findings for a Roblox account, with category,
   reviewer, and record links.
-- `/rotector links id` — Discord accounts, tracked servers, and alts linked to
+- `/check links id` — Discord accounts, tracked servers, and alts linked to
   a Roblox account.
-- `/rotector group id` — findings for a Roblox group.
-- `/rotector sources` — which detection sources the key reports on.
+- `/check group id` — findings for a Roblox group.
+- `/check sources` — which detection sources the key reports on.
 
 Lookups answer privately, send only the identifier being checked, and write a
-case log when a result comes back flagged.
+case log when a result comes back flagged. Each result carries a **Pin to mod
+log** button that files the card as a numbered case, turning a throwaway lookup
+into retained evidence.
 
 Mentioning Hugh also shows the short project introduction.
 

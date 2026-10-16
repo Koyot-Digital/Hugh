@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
     let incidents = IncidentReporter::new(
         IncidentSink::open(&config.incident_log_path).await?,
         webhook,
+        Arc::clone(&config),
     );
     let quarantine = if config.quarantine.enabled {
         Some(QuarantineStore::open(&config.quarantine.store_path).await?)

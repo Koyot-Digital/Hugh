@@ -7,9 +7,11 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
-- `/rotector` staff lookups against the Rotector API for Discord accounts,
+- `/check` staff lookups against the Rotector API for Discord accounts,
   Roblox accounts, linked accounts and alts, Roblox groups, and enabled
   detection sources, with a case log for every flagged result.
+- A **Pin to mod log** button on every `/check` result, which files the card as
+  a numbered case through the incident webhook and log.
 - Configurable staff tiers (`everyone`, `helper`, `moderator`, `admin`,
   `owner`) with a required tier per command in `[permissions.commands]`, and a
   `permission_denied` case when a command is refused.
@@ -26,6 +28,10 @@ Versioning and the Keep a Changelog format.
 
 ### Changed
 
+- Case and lookup cards redesigned: icon-led titles, member avatars as the card
+  author and thumbnail, Roblox headshots on Roblox lookups, one line of
+  clickable references instead of three fields, and a configurable `[icons]`
+  slot per label.
 - Case reports now lead with a plain-English outcome, label every piece of
   evidence, render durations and role mentions, and omit empty details.
 - Console logs are compact and target-free by default; `HUGH_LOG_FORMAT=json`

@@ -146,10 +146,10 @@ limit.
 
 Rotector is a third-party service that flags Roblox and Discord accounts for
 predatory and inappropriate behaviour. When this section is enabled, Hugh
-registers the staff-only `/rotector` command and reads
+registers the staff-only `/check` command and reads
 `HUGH_ROTECTOR_API_KEY` at startup.
 
-- `enabled`: registers `/rotector` and requires the API key.
+- `enabled`: registers `/check` and requires the API key.
 - `base_url`: API origin. Default: `https://roscoe.rayward.app`.
 - `language`: locale for the status text the API composes, such as `es` or
   `zh-CN`. Unknown values fall back to English.
@@ -163,11 +163,11 @@ to the moderator who ran the lookup:
 
 | Subcommand | Endpoint | Shows |
 | --- | --- | --- |
-| `/rotector discord [user] [id]` | `/v2/lookup/rotector/discord/user/{id}` | Verdict, findings, linked flagged Roblox accounts. |
-| `/rotector roblox id` | `/v2/lookup/rotector/roblox/user/{id}` | Verdict, category, findings, findings awaiting review, reviewer, record links. |
-| `/rotector links id` | `/v2/lookup/rotector/roblox/user/{id}/discord` | Linked Discord accounts, tracked servers, and known alts. |
-| `/rotector group id` | `/v2/lookup/rotector/roblox/group/{id}` | Group verdict and findings. |
-| `/rotector sources` | `/v2/providers` | Detection sources enabled for Hugh's key. |
+| `/check discord [user] [id]` | `/v2/lookup/rotector/discord/user/{id}` | Verdict, findings, linked flagged Roblox accounts. |
+| `/check roblox id` | `/v2/lookup/rotector/roblox/user/{id}` | Verdict, category, findings, findings awaiting review, reviewer, record links. |
+| `/check links id` | `/v2/lookup/rotector/roblox/user/{id}/discord` | Linked Discord accounts, tracked servers, and known alts. |
+| `/check group id` | `/v2/lookup/rotector/roblox/group/{id}` | Group verdict and findings. |
+| `/check sources` | `/v2/providers` | Detection sources enabled for Hugh's key. |
 
 Verdicts come from the API's `flagType` field: no findings, flagged, confirmed,
 being processed, provisional, mixed, past offender, redacted, or awaiting human
@@ -175,6 +175,65 @@ review. Only the first six count as findings, and only a finding produces a
 case log. A `404` is reported as "no record", which is not a clearance: the
 account may simply never have been analysed. Hugh does not screen joins against
 Rotector; a moderator decides what to do with every result.
+
+### Pinning a lookup
+
+A `/check` result is ephemeral, so it disappears and no one else can see it.
+Each result therefore carries a **Pin to mod log** button: pressing it writes
+the card into the incident log as a numbered case and delivers it through the
+incident webhook, with the lookup card shown beneath the case header. The button
+then disappears, so the same card cannot be pinned twice.
+
+Pinning re-checks the `check` tier rather than trusting whoever holds the
+message, and the case is recorded as kind `rotector_lookup`, action
+`lookup_pinned`, naming the moderator who pinned it. Hugh's incident webhook is
+an ordinary channel webhook, which Discord does not allow components on, so the
+button exists on the lookup result rather than on the mod-log message.
+
+## `[icons]`
+
+Case and lookup cards are built around icon slots. Every slot has a plain-emoji
+fallback, so this section is entirely optional; set a slot to a Discord custom
+emoji to brand the cards:
+
+```toml
+[icons]
+flagged = "<:shield_alert:123456789012345678>"
+safe = "<:badge_check:123456789012345678>"
+```
+
+Values are emoji, not names — use `<:name:id>` for a static emoji and
+`<a:name:id>` for an animated one. With Developer Mode on, right-click an
+uploaded emoji and copy its ID, or type `\:name:` in Discord to reveal the full
+form. An unknown slot name stops startup; the slots are:
+
+| Slot | Where it appears | Lucide icon to upload |
+| --- | --- | --- |
+| `case` | case titles with no specific outcome, pin button | `folder-open` |
+| `reason` | the "why" line of every case | `file-text` |
+| `details` | evidence block, lookup findings | `search` |
+| `member` | member reference, Discord ID field | `user-round` |
+| `moderator` | who acted on the case | `shield` |
+| `channel` | channel reference | `hash` |
+| `deleted` | message deleted | `message-square-x` |
+| `timeout` | member timed out | `timer` |
+| `kicked` | member kicked | `door-open` |
+| `raid` | raid mode enabled | `siren` |
+| `join` | join screening | `user-round-plus` |
+| `role` | protected roles removed | `user-round-cog` |
+| `quarantine` | member quarantined | `lock` |
+| `release` | member released | `lock-open` |
+| `lock` | channel locked | `lock-keyhole` |
+| `denied` | command blocked | `ban` |
+| `failed` | any failed or partial enforcement | `triangle-alert` |
+| `flagged` | Rotector findings, category | `shield-alert` |
+| `safe` | no findings | `badge-check` |
+| `review` | awaiting review, logged-only outcomes | `clock` |
+| `unknown` | no record, unrecognised status | `circle-question-mark` |
+| `roblox` | Roblox accounts and alts | `gamepad-2` |
+| `discord` | Discord accounts | `message-circle` |
+| `group` | Roblox groups | `users-round` |
+| `source` | detection sources | `satellite-dish` |
 
 ## `[permissions]`
 
@@ -195,7 +254,7 @@ anyone in `trusted_user_ids` counts as `owner`.
 | Command | Default tier |
 | --- | --- |
 | `/help`, `/hugh` | `everyone` |
-| `/rotector` | `moderator` |
+| `/check` | `moderator` |
 | `/lock`, `/banish`, `/unbanish` | `moderator` |
 
 While every tier list is empty, Hugh keeps Discord's own command gating on its

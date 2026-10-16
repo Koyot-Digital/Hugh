@@ -4,8 +4,8 @@ use anyhow::{Context as _, Result, bail};
 use serenity::{
     all::{
         Channel, ChannelId, CommandDataOption, CommandDataOptionValue, CommandInteraction,
-        CommandOptionType, Context, GuildChannel, GuildId, Interaction, PermissionOverwrite,
-        PermissionOverwriteType, Permissions, RoleId, UserId,
+        CommandOptionType, ComponentInteraction, Context, GuildChannel, GuildId, Interaction,
+        PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId, UserId,
     },
     builder::{
         CreateCommand, CreateCommandOption, CreateEmbed, CreateInteractionResponse,
@@ -44,7 +44,7 @@ fn discord_gate(command: &str) -> Option<Permissions> {
     match command {
         "lock" => Some(Permissions::MANAGE_CHANNELS),
         "banish" | "unbanish" => Some(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS),
-        "rotector" => Some(Permissions::MODERATE_MEMBERS),
+        "check" => Some(Permissions::MODERATE_MEMBERS),
         _ => None,
     }
 }
@@ -121,7 +121,7 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
         ),
     ];
     if config.rotector.enabled {
-        commands.push(("rotector", lookup::command()));
+        commands.push(("check", lookup::command()));
     }
     let names = commands
         .iter()
@@ -153,8 +153,13 @@ pub async fn handle(
     incidents: &IncidentReporter,
     rotector: Option<&RotectorClient>,
 ) {
-    let Interaction::Command(command) = interaction else {
-        return;
+    let command = match interaction {
+        Interaction::Command(command) => command,
+        Interaction::Component(component) => {
+            component_pressed(ctx, &component, config, incidents).await;
+            return;
+        }
+        _ => return,
     };
     if command
         .guild_id
@@ -172,7 +177,7 @@ pub async fn handle(
         "lock" => lock(ctx, &command, config, incidents).await,
         "banish" => banish(ctx, &command, config, store, resources, incidents).await,
         "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
-        "rotector" => lookup::handle(ctx, &command, config, rotector, incidents).await,
+        "check" => lookup::handle(ctx, &command, config, rotector, incidents).await,
         "help" => help(ctx, &command, config).await,
         "hugh" => about(ctx, &command).await,
         _ => Ok(()),
@@ -470,13 +475,13 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
         embed = embed.field(
             "Account checks",
             format!(
-                "`/rotector discord [user] [id]` — safety findings for a Discord account\n\
-                 `/rotector roblox id` — findings for a Roblox account\n\
-                 `/rotector links id` — Discord accounts and alts linked to a Roblox account\n\
-                 `/rotector group id` — findings for a Roblox group\n\
-                 `/rotector sources` — which detection sources are enabled\n\
+                "`/check discord [user] [id]` — safety findings for a Discord account\n\
+                 `/check roblox id` — findings for a Roblox account\n\
+                 `/check links id` — Discord accounts and alts linked to a Roblox account\n\
+                 `/check group id` — findings for a Roblox group\n\
+                 `/check sources` — which detection sources are enabled\n\
                  Required level: {}",
-                level("rotector")
+                level("check")
             ),
             false,
         );
@@ -532,11 +537,57 @@ fn merged_overwrite(
     PermissionOverwrite { allow, deny, kind }
 }
 
+/// Routes a pressed button. Only `/check`'s pin button exists today; anything
+/// else is ignored so a stale card cannot drive Hugh.
+async fn component_pressed(
+    ctx: &Context,
+    component: &ComponentInteraction,
+    config: &Config,
+    incidents: &IncidentReporter,
+) {
+    if component
+        .guild_id
+        .is_none_or(|guild| guild.get() != config.guild_id)
+        || !lookup::is_pin_button(&component.data.custom_id)
+    {
+        return;
+    }
+    if let Err(error) = lookup::handle_pin(ctx, component, config, incidents).await {
+        error!(?error, "pin to mod log failed");
+        let _ = component
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(format!("Hugh could not pin that lookup: {error}"))
+                        .ephemeral(true),
+                ),
+            )
+            .await;
+    }
+}
+
 /// The tier a command needs, and the tier the invoking member actually holds.
 #[derive(Debug, Clone, Copy)]
 pub struct Denied {
     required: AccessLevel,
     held: AccessLevel,
+}
+
+/// The tier a member holds, given the roles and resolved permissions Discord
+/// attached to their interaction.
+#[must_use]
+pub fn member_level(
+    config: &Config,
+    user_id: u64,
+    roles: &[u64],
+    permissions: Permissions,
+) -> AccessLevel {
+    let powers = DiscordPowers {
+        administrator: permissions.administrator(),
+        moderator: permissions.intersects(moderation_permissions()),
+    };
+    config.access_level(user_id, roles, powers)
 }
 
 fn access_check(command: &CommandInteraction, config: &Config) -> Result<(), Denied> {
@@ -551,11 +602,7 @@ fn access_check(command: &CommandInteraction, config: &Config) -> Result<(), Den
     let permissions = member
         .and_then(|member| member.permissions)
         .unwrap_or_default();
-    let powers = DiscordPowers {
-        administrator: permissions.administrator(),
-        moderator: permissions.intersects(moderation_permissions()),
-    };
-    let held = config.access_level(command.user.id.get(), &roles, powers);
+    let held = member_level(config, command.user.id.get(), &roles, permissions);
     if held >= required {
         Ok(())
     } else {
