@@ -85,9 +85,10 @@ With `[rotector]` enabled, staff can check accounts against the Rotector API:
 - `/check sources` — which detection sources the key reports on.
 
 Lookups answer privately, send only the identifier being checked, and write a
-case log when a result comes back flagged. Each result carries a **Pin to mod
-log** button that files the card as a numbered case, turning a throwaway lookup
-into retained evidence.
+case log when a result comes back flagged. Each result carries a **Pin for
+everyone** button that re-posts the card into the channel as a normal message,
+turning a private, disappearing result into something the whole staff channel
+can see and keep. Pinned cards are also filed as numbered cases.
 
 Mentioning Hugh also shows the short project introduction.
 

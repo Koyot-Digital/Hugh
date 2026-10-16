@@ -10,8 +10,9 @@ Versioning and the Keep a Changelog format.
 - `/check` staff lookups against the Rotector API for Discord accounts,
   Roblox accounts, linked accounts and alts, Roblox groups, and enabled
   detection sources, with a case log for every flagged result.
-- A **Pin to mod log** button on every `/check` result, which files the card as
-  a numbered case through the incident webhook and log.
+- A **Pin for everyone** button on every `/check` result, which re-posts the
+  ephemeral card into the channel for all to see and files it as a numbered
+  case.
 - Configurable staff tiers (`everyone`, `helper`, `moderator`, `admin`,
   `owner`) with a required tier per command in `[permissions.commands]`, and a
   `permission_denied` case when a command is refused.

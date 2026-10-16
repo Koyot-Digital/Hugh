@@ -178,17 +178,22 @@ Rotector; a moderator decides what to do with every result.
 
 ### Pinning a lookup
 
-A `/check` result is ephemeral, so it disappears and no one else can see it.
-Each result therefore carries a **Pin to mod log** button: pressing it writes
-the card into the incident log as a numbered case and delivers it through the
-incident webhook, with the lookup card shown beneath the case header. The button
-then disappears, so the same card cannot be pinned twice.
+A `/check` result is ephemeral: only the moderator who ran it can see it, and
+it disappears. Each result therefore carries a **Pin for everyone** button.
+Pressing it posts the same card into the channel as an ordinary message that
+every member of that channel can see, quote, and scroll back to, credited to the
+moderator who pinned it. The button then disappears, so one card cannot be
+posted twice.
 
+The pinned card is also filed as a numbered case (kind `rotector_lookup`,
+action `lookup_pinned`) in the incident log and the incident webhook, recording
+who pinned it, where, and the ID of the public message.
+
+Hugh needs **Send Messages** and **Embed Links** in the channel where the button
+is pressed; without them the lookup stays private and the moderator is told why.
 Pinning re-checks the `check` tier rather than trusting whoever holds the
-message, and the case is recorded as kind `rotector_lookup`, action
-`lookup_pinned`, naming the moderator who pinned it. Hugh's incident webhook is
-an ordinary channel webhook, which Discord does not allow components on, so the
-button exists on the lookup result rather than on the mod-log message.
+message. Mentions are suppressed on the posted card, so pinning never pings the
+account under review.
 
 ## `[icons]`
 

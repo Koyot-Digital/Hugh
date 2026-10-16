@@ -9,9 +9,9 @@ use serenity::{
         ComponentInteraction, Context, ReactionType, User, UserId,
     },
     builder::{
-        CreateActionRow, CreateButton, CreateCommand, CreateCommandOption, CreateEmbed,
-        CreateEmbedAuthor, CreateEmbedFooter, CreateInteractionResponse,
-        CreateInteractionResponseMessage, EditInteractionResponse,
+        CreateActionRow, CreateAllowedMentions, CreateButton, CreateCommand, CreateCommandOption,
+        CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, CreateInteractionResponse,
+        CreateInteractionResponseMessage, CreateMessage, EditInteractionResponse,
     },
 };
 
@@ -191,11 +191,49 @@ pub async fn handle_pin(
         bail!("that lookup card is no longer available to pin");
     }
 
+    // The lookup itself was ephemeral. Posting the card into the channel is the
+    // point of the button: it turns a private result into something the rest of
+    // the staff can see, quote, and keep.
+    let posted = component
+        .channel_id
+        .send_message(
+            &ctx.http,
+            CreateMessage::new()
+                .content(format!(
+                    "{} Lookup pinned by <@{}>",
+                    config.icon("pin"),
+                    component.user.id.get()
+                ))
+                .allowed_mentions(CreateAllowedMentions::new())
+                .embeds(cards.clone()),
+        )
+        .await
+        .context("Hugh could not post in this channel; it needs Send Messages and Embed Links")?;
+
+    // Acknowledge before the case log, so the click is answered well inside
+    // Discord's three-second interaction window, and drop the button so the
+    // same card cannot be posted twice.
+    component
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .content(format!(
+                        "{} Posted in this channel for everyone: {}",
+                        config.icon("pin"),
+                        posted.link()
+                    ))
+                    .embeds(cards.clone())
+                    .components(Vec::new()),
+            ),
+        )
+        .await?;
+
     let mut incident = Incident::new(
         "rotector_lookup",
         config.guild_id,
         "lookup_pinned",
-        "A moderator pinned a Rotector lookup into the mod log as evidence",
+        "A moderator pinned a Rotector lookup into the channel as evidence",
     );
     incident.moderator = Some((&component.user).into());
     incident.channel_id = Some(component.channel_id.get());
@@ -203,25 +241,10 @@ pub async fn handle_pin(
     if !target.is_empty() {
         incident.details.insert("target".into(), target.into());
     }
-    let case_id = incidents
-        .report_with(&ctx.http, incident, cards.clone())
-        .await;
-
-    // Drop the button so the same card cannot be pinned twice.
-    component
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .content(format!(
-                        "{} Pinned to the mod log as **Case #{case_id}**.",
-                        config.icon("case")
-                    ))
-                    .embeds(cards)
-                    .components(Vec::new()),
-            ),
-        )
-        .await?;
+    incident
+        .details
+        .insert("message_id".into(), posted.id.get().into());
+    incidents.report_with(&ctx.http, incident, cards).await;
     Ok(())
 }
 
@@ -256,7 +279,7 @@ impl Outcome {
 
     fn pin_button(&self, config: &Config) -> CreateActionRow {
         let mut button = CreateButton::new(format!("{PIN_ID}:{}:{}", self.lookup, self.target))
-            .label("Pin to mod log")
+            .label("Pin for everyone")
             .style(ButtonStyle::Secondary);
         // A button label is plain text: emoji markup belongs in the separate
         // emoji field, or `<:case:1234>` would be printed verbatim. An icon
@@ -1023,7 +1046,7 @@ mod tests {
         let button = &row["components"][0];
         assert_eq!(button["custom_id"], "check_pin:roblox_user:77");
         assert!(is_pin_button(button["custom_id"].as_str().unwrap()));
-        assert_eq!(button["label"].as_str().unwrap(), "Pin to mod log");
+        assert_eq!(button["label"].as_str().unwrap(), "Pin for everyone");
         // The fallback icon is a unicode emoji, so it parses into the button's
         // own emoji field rather than being printed in the label.
         assert_eq!(button["emoji"]["name"].as_str().unwrap(), "📌");
@@ -1037,7 +1060,7 @@ pin = \"<:pin:1560745728769523902>\"",
         .unwrap();
         let row = serde_json::to_value(outcome.pin_button(&custom)).unwrap();
         let button = &row["components"][0];
-        assert_eq!(button["label"].as_str().unwrap(), "Pin to mod log");
+        assert_eq!(button["label"].as_str().unwrap(), "Pin for everyone");
         assert_eq!(
             button["emoji"]["id"].as_str().unwrap(),
             "1560745728769523902"
