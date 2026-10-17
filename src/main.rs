@@ -6,6 +6,7 @@ mod incident;
 mod lookup;
 mod quarantine;
 mod rotector;
+mod scrape;
 mod state;
 
 use std::{env, path::PathBuf, sync::Arc};

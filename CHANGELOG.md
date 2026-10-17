@@ -7,6 +7,11 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
+- `/scrape`, an owner-only forum export: every post's title, opening message,
+  author, tags, timestamps and images written as JSON Lines, one
+  self-contained record per post, attached to the reply and saved under
+  `scrape.output_dir`. Archived posts and per-post replies are optional, and
+  each run is filed as a numbered case.
 - `/check` staff lookups against the Rotector API for Discord accounts,
   Roblox accounts, linked accounts and alts, Roblox groups, and enabled
   detection sources, with a case log for every flagged result.

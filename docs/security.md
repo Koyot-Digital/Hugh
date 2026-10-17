@@ -49,6 +49,22 @@ numbers continue from the greatest valid `case_id` in the existing JSONL file.
 not delete or edit it while members are quarantined. Back it up with the service
 data and restrict filesystem access to the Hugh service account.
 
+## Forum exports
+
+`/scrape` is the one feature that does retain message content, because copying
+posts out of a forum is its entire purpose. An export under
+`scrape.output_dir` holds post titles, message text, author identities, and
+image URLs for a whole channel. Treat those files as a copy of the community's
+content rather than as moderation metadata: restrict them to the service
+account, keep them out of version control (`data/` is already ignored), and
+delete a run you no longer need.
+
+The command is `owner` by default and cannot be reached by a Discord permission
+alone, so only the people listed in `[permissions]` can produce one. Every run
+is recorded as a numbered case naming who exported which forum, so an export
+cannot be taken quietly. Set `scrape.enabled = false` where no one should be
+able to take one at all.
+
 ## Safe rollout
 
 1. Configure only known IDs and validate with `--check-config`.

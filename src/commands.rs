@@ -20,6 +20,7 @@ use crate::{
     lookup,
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
+    scrape,
 };
 
 pub const REPOSITORY_URL: &str = "https://github.com/Koyot-Digital/Hugh";
@@ -45,6 +46,9 @@ fn discord_gate(command: &str) -> Option<Permissions> {
         "lock" => Some(Permissions::MANAGE_CHANNELS),
         "banish" | "unbanish" => Some(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS),
         "check" => Some(Permissions::MODERATE_MEMBERS),
+        // A bulk export of member content is an owner's tool, so without
+        // configured tiers Discord shows it to administrators only.
+        "scrape" => Some(Permissions::ADMINISTRATOR),
         _ => None,
     }
 }
@@ -123,6 +127,9 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
     if config.rotector.enabled {
         commands.push(("check", lookup::command()));
     }
+    if config.scrape.enabled {
+        commands.push(("scrape", scrape::command()));
+    }
     let names = commands
         .iter()
         .map(|(name, _)| *name)
@@ -178,6 +185,7 @@ pub async fn handle(
         "banish" => banish(ctx, &command, config, store, resources, incidents).await,
         "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
         "check" => lookup::handle(ctx, &command, config, rotector, incidents).await,
+        "scrape" => scrape::handle(ctx, &command, config, incidents).await,
         "help" => help(ctx, &command, config).await,
         "hugh" => about(ctx, &command).await,
         _ => Ok(()),
@@ -486,6 +494,16 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
             false,
         );
     }
+    if config.scrape.enabled {
+        embed = embed.field(
+            "Archiving",
+            format!(
+                "`/scrape forum [archived] [replies] [limit]` — export a forum's posts, titles and images as JSON Lines for a database ({})",
+                level("scrape")
+            ),
+            false,
+        );
+    }
     embed = embed
         .field("Staff levels", "Access is set per command in Hugh's configuration using the `everyone`, `helper`, `moderator`, `admin`, and `owner` levels. A higher level always satisfies a lower one.", false)
         .field("Case logs", "Every enforcement action receives a durable case number with the user, moderator, reason, outcome, channel, and relevant evidence.", false)
@@ -678,9 +696,16 @@ pub fn option_user(options: &[CommandDataOption], name: &str) -> Option<UserId> 
     })
 }
 
-fn option_channel(options: &[CommandDataOption], name: &str) -> Option<ChannelId> {
+pub fn option_channel(options: &[CommandDataOption], name: &str) -> Option<ChannelId> {
     options.iter().find_map(|option| match option.value {
         CommandDataOptionValue::Channel(id) if option.name == name => Some(id),
+        _ => None,
+    })
+}
+
+pub fn option_bool(options: &[CommandDataOption], name: &str) -> Option<bool> {
+    options.iter().find_map(|option| match option.value {
+        CommandDataOptionValue::Boolean(value) if option.name == name => Some(value),
         _ => None,
     })
 }

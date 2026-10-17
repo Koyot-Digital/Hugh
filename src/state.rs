@@ -345,6 +345,7 @@ mod tests {
             role_guard: RoleGuardConfig::default(),
             quarantine: crate::config::QuarantineConfig::default(),
             rotector: crate::config::RotectorConfig::default(),
+            scrape: crate::config::ScrapeConfig::default(),
             icons: std::collections::BTreeMap::new(),
             permissions: crate::config::PermissionsConfig::default(),
         }

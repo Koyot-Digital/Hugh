@@ -19,6 +19,7 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
   quarantine.
 - `lookup.rs` renders the `/check` staff lookups as readable case cards.
 - `rotector.rs` is a read-only client for the Rotector safety lookup API.
+- `scrape.rs` pages a forum channel and serialises its posts as JSON Lines.
 - `quarantine.rs` maintains an append-only role recovery journal.
 - `incident.rs` assigns durable case numbers, writes machine-readable records,
   and renders moderator-friendly webhook reports.

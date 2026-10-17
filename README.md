@@ -18,7 +18,8 @@ The current core protects against:
 - reversible member quarantine with durable role snapshots;
 - automatic quarantine role/channel provisioning and server-wide isolation;
 - moderator-operated channel lockdowns;
-- staff account-safety lookups through the Rotector API.
+- staff account-safety lookups through the Rotector API;
+- owner-only forum exports for archiving a community's posts.
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
 exempted, command access is set per command across five staff tiers, all
@@ -31,7 +32,8 @@ title, the subject's avatar anchors the card, every clickable reference sits on
 one line, and the details block labels each piece of evidence, renders durations
 as "10 minutes", shows role IDs as role mentions, and drops empty fields. Icons
 are configurable per slot, so a server can swap in its own Lucide-style emoji.
-Message bodies are never retained.
+Message bodies are never retained, with one deliberate exception: the
+owner-only `/scrape` export, whose purpose is to copy a forum's posts out.
 
 ## Quick start
 
@@ -64,6 +66,8 @@ file.
 - `/banish user [reason]` stores the member's roles and moves them into quarantine.
 - `/unbanish user [reason]` restores the stored roles and releases the member.
 - `/check …` runs staff account-safety lookups (see below).
+- `/scrape forum [archived] [replies] [limit]` exports a forum channel's posts,
+  titles and images as JSON Lines, ready to load into a database. Owner only.
 - `/help` shows the in-Discord guide, including the tier each command needs.
 - `/hugh` introduces the project and links to this repository.
 
@@ -89,6 +93,16 @@ case log when a result comes back flagged. Each result carries a **Pin for
 everyone** button that re-posts the card into the channel as a normal message,
 turning a private, disappearing result into something the whole staff channel
 can see and keep. Pinned cards are also filed as numbered cases.
+
+`/scrape` walks a forum or media channel and writes one JSON object per post —
+title, opening message, author, tags, timestamps, and every image, with
+non-image uploads kept separate. Replies are included on request. IDs are
+strings and timestamps are RFC 3339, so a record imports without a join and a
+partial file is still valid. The export is attached to the private reply and
+written to `scrape.output_dir`; each run is filed as a numbered case. See the
+[configuration reference](docs/configuration.md) for the record shape, and note
+that no Discord permission reaches the `owner` tier, so `/scrape` needs its
+holders listed in `[permissions]`.
 
 Mentioning Hugh also shows the short project introduction.
 

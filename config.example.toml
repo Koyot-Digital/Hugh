@@ -91,6 +91,20 @@ request_timeout_seconds = 10
 # Record a case log whenever a lookup comes back flagged.
 log_flagged_lookups = true
 
+[scrape]
+# Owner-only forum exports through /scrape. Each run writes one JSON Lines file
+# with a record per forum post: title, opening message, author, tags, and every
+# image. Set enabled = false to drop the command entirely.
+enabled = true
+output_dir = "data/scrapes"
+# Ceiling per run; /scrape's own limit option can only lower it. The newest
+# posts are taken first.
+max_posts = 500
+# Only used when /scrape is called with replies: true.
+max_replies_per_post = 200
+# Attach the export to the reply as well as writing it to output_dir.
+attach_results = true
+
 [permissions]
 # Staff tiers, lowest to highest: helper < moderator < admin < owner. A member
 # in a higher tier satisfies every requirement below it, and anyone listed in
@@ -117,13 +131,14 @@ check = "moderator"
 lock = "moderator"
 banish = "moderator"
 unbanish = "moderator"
+scrape = "owner"
 
 # Icons used on case and lookup cards. Every slot has a plain-emoji fallback,
 # so this whole section is optional. Upload Lucide-style emoji to the server and
 # paste them here as <:name:id> to brand the cards. Slots: case, reason, details,
 # pin, member, moderator, channel, deleted, timeout, kicked, raid, join, role,
 # quarantine, release, lock, denied, failed, flagged, safe, review, unknown,
-# roblox, discord, group, source.
+# roblox, discord, group, source, forum, image.
 [icons]
 # flagged = "<:shield_alert:123456789012345678>"
 # safe = "<:badge_check:123456789012345678>"

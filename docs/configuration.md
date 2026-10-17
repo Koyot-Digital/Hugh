@@ -195,6 +195,86 @@ Pinning re-checks the `check` tier rather than trusting whoever holds the
 message. Mentions are suppressed on the posted card, so pinning never pings the
 account under review.
 
+## `[scrape]`
+
+`/scrape` exports a forum channel for archiving: every post's title, opening
+message, author, tags, timestamps, and images, written as
+[JSON Lines](https://jsonlines.org/) — one independent JSON object per line.
+It is an `owner` command by default, because it is a bulk read of member
+content rather than a moderation action.
+
+- `enabled`: registers `/scrape`. Set it to `false` to drop the command.
+- `output_dir`: directory the exports are written to. Default: `data/scrapes`.
+- `max_posts`: ceiling on posts per run, from 1 to 10000. Default: `500`. The
+  command's own `limit` option can lower this but never raise it.
+- `max_replies_per_post`: ceiling on replies captured per post, used only when
+  the command is called with `replies: true`. Default: `200`.
+- `attach_results`: also attach the export to the reply. A file over 7 MiB is
+  left on disk only, since Discord refuses larger uploads from most servers.
+
+### Running it
+
+`/scrape forum [archived] [replies] [limit]`
+
+- `forum`: the forum or media channel to export. Discord's picker is limited to
+  those two channel types, since only they keep their posts as threads.
+- `archived`: include archived posts. Defaults to yes.
+- `replies`: also capture the replies inside each post. Defaults to no, which
+  keeps a run to one request per post.
+- `limit`: maximum posts for this run, newest first.
+
+Active and archived posts are two separate Discord listings; Hugh merges them
+by ID, so a post that archives mid-run is exported once. Posts are written
+oldest first. When a limit is reached, the newest posts are kept and the reply
+says so.
+
+Hugh needs **View Channel** and **Read Message History** on the forum. A single
+post it cannot read is recorded with `opening_message_missing` rather than
+failing the run; if no post can be read, the command stops and names the two
+permissions. A large forum takes minutes of paged requests, so the answer is
+deferred and arrives when the file is written.
+
+Every run is filed as a numbered case (kind `forum_scrape`, action
+`forum_exported`) recording who exported what, from where, and how much.
+
+### The export format
+
+Each line is a complete post, repeating its run and forum context so a record
+can be loaded without a join and a half-written file is still a valid import.
+IDs are strings, because a Discord snowflake does not survive a 64-bit JSON
+number in most importers, and timestamps are RFC 3339.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | Record layout version, currently `1`. |
+| `scraped_at` | When the run started. Identical on every line of a file. |
+| `guild_id`, `forum_id`, `forum_name` | Where the post came from. |
+| `post_id`, `title`, `url` | The post itself and a link back to it. |
+| `author_id`, `author` | The post's author; `author` is omitted when the opening message could not be read. |
+| `created_at`, `last_message_at`, `archived_at` | Post lifetime. |
+| `archived`, `locked`, `pinned` | Post state at export time. |
+| `tags` | Applied forum tags, by name, in the forum's own order. |
+| `reply_count` | Discord's reply count, which excludes the opening message. Present even when replies were not captured. |
+| `body`, `posted_at`, `edited_at` | The opening message, with its markdown kept exactly as written. |
+| `mentions` | Accounts the opening message mentioned, already resolved. |
+| `images` | Every image in the post, each tagged with the message it came from. |
+| `files` | Non-image uploads, kept apart so an image table stays an image table. |
+| `replies` | Captured replies, oldest first, present only with `replies: true`. |
+| `opening_message_missing` | Present and `true` when the opening message could not be read. |
+| `replies_clipped` | Present and `true` when the post holds more replies than the cap. |
+
+An image or file carries `source` (`attachment` for an upload, `embed` for a
+picture Discord unfurled from a link), `message_id`, `url`, and whatever of
+`proxy_url`, `attachment_id`, `filename`, `content_type`, `size_bytes`,
+`width`, `height`, `description` and `page_url` Discord provided. An image that
+appears twice in a post is recorded once.
+
+Discord signs attachment links and they stop working roughly a day later, so
+the URLs in an export are not a long-term store. Each image keeps its message
+ID, attachment ID and filename, which is what Discord's API needs to issue
+fresh links when the archive is loaded. Copy the files themselves if the
+archive has to outlive those links.
+
 ## `[icons]`
 
 Case and lookup cards are built around icon slots. Every slot has a plain-emoji
@@ -240,6 +320,8 @@ form. An unknown slot name stops startup; the slots are:
 | `discord` | Discord accounts | `message-circle` |
 | `group` | Roblox groups | `users-round` |
 | `source` | detection sources | `satellite-dish` |
+| `forum` | forum exports | `message-square-text` |
+| `image` | exported images | `image` |
 
 ## `[permissions]`
 
@@ -262,6 +344,7 @@ anyone in `trusted_user_ids` counts as `owner`.
 | `/help`, `/hugh` | `everyone` |
 | `/check` | `moderator` |
 | `/lock`, `/banish`, `/unbanish` | `moderator` |
+| `/scrape` | `owner` |
 
 While every tier list is empty, Hugh keeps Discord's own command gating on its
 staff commands, so clients hide them from members without the matching Discord
@@ -273,6 +356,11 @@ without holding Manage Roles.
 A refused command answers privately with the tier it needs and the tier the
 member holds, and is recorded as a `permission_denied` case so repeated
 attempts at staff tooling stay visible.
+
+No Discord permission grants the `owner` tier — Administrator reaches `admin`
+and stops there. An `owner` command such as `/scrape` therefore needs its
+holders listed in `owner_user_ids`, `owner_role_ids`, or `trusted_user_ids`
+before anyone can run it.
 
 ## Slash commands
 

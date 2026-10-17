@@ -37,6 +37,8 @@ pub struct Config {
     pub quarantine: QuarantineConfig,
     #[serde(default)]
     pub rotector: RotectorConfig,
+    #[serde(default)]
+    pub scrape: ScrapeConfig,
     /// Icon overrides for case and lookup cards, keyed by the names in
     /// [`ICONS`]. Values are plain emoji or Discord custom emoji such as
     /// `<:shield_alert:123456789012345678>`.
@@ -259,6 +261,34 @@ impl Default for RotectorConfig {
     }
 }
 
+/// Forum exports written by the owner-only `/scrape` command.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScrapeConfig {
+    pub enabled: bool,
+    /// Directory the JSONL exports are written to.
+    pub output_dir: String,
+    /// Ceiling on posts per run. A run walks Discord one page at a time, so
+    /// this is what keeps a huge forum inside the interaction's lifetime.
+    pub max_posts: usize,
+    /// Ceiling on replies captured per post, when replies are requested.
+    pub max_replies_per_post: usize,
+    /// Attach the export to the reply as well as writing it to disk.
+    pub attach_results: bool,
+}
+
+impl Default for ScrapeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            output_dir: "data/scrapes".to_owned(),
+            max_posts: 500,
+            max_replies_per_post: 200,
+            attach_results: true,
+        }
+    }
+}
+
 /// Staff tiers, ordered from least to most privileged. A member who satisfies a
 /// higher tier also satisfies every tier below it.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -296,7 +326,7 @@ pub struct DiscordPowers {
 /// Every icon slot Hugh renders, with the plain-emoji fallback used when the
 /// operator has not uploaded a matching custom emoji. Keys are stable; the
 /// Lucide icon each one is modelled on is noted in `docs/configuration.md`.
-pub const ICONS: [(&str, &str); 26] = [
+pub const ICONS: [(&str, &str); 28] = [
     ("case", "🗂️"),
     ("pin", "📌"),
     ("reason", "📝"),
@@ -323,16 +353,19 @@ pub const ICONS: [(&str, &str); 26] = [
     ("discord", "💬"),
     ("group", "👥"),
     ("source", "📡"),
+    ("forum", "🧵"),
+    ("image", "🖼️"),
 ];
 
 /// Commands Hugh knows about, with the tier each one needs by default.
-pub const COMMAND_LEVELS: [(&str, AccessLevel); 6] = [
+pub const COMMAND_LEVELS: [(&str, AccessLevel); 7] = [
     ("help", AccessLevel::Everyone),
     ("hugh", AccessLevel::Everyone),
     ("check", AccessLevel::Moderator),
     ("lock", AccessLevel::Moderator),
     ("banish", AccessLevel::Moderator),
     ("unbanish", AccessLevel::Moderator),
+    ("scrape", AccessLevel::Owner),
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -511,6 +544,7 @@ impl Config {
             }
         }
         self.validate_rotector()?;
+        self.validate_scrape()?;
         self.validate_permissions()?;
         self.validate_icons()?;
         Ok(())
@@ -563,6 +597,22 @@ impl Config {
         }
         if !(1..=60).contains(&self.rotector.request_timeout_seconds) {
             bail!("rotector.request_timeout_seconds must be between 1 and 60");
+        }
+        Ok(())
+    }
+
+    fn validate_scrape(&self) -> Result<()> {
+        if !self.scrape.enabled {
+            return Ok(());
+        }
+        if self.scrape.output_dir.trim().is_empty() {
+            bail!("scrape.output_dir must not be empty");
+        }
+        if !(1..=10_000).contains(&self.scrape.max_posts) {
+            bail!("scrape.max_posts must be between 1 and 10000");
+        }
+        if !(1..=10_000).contains(&self.scrape.max_replies_per_post) {
+            bail!("scrape.max_replies_per_post must be between 1 and 10000");
         }
         Ok(())
     }
@@ -826,6 +876,38 @@ base_url = "roscoe.rayward.app""#,
 
         config.rotector.base_url = "https://roscoe.rayward.app".to_owned();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn scrape_is_owner_only_and_bounded() {
+        let config: Config = toml::from_str(
+            r#"guild_id = "1"
+
+[role_guard]
+enabled = false
+
+[scrape]
+max_posts = 50"#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.required_level("scrape"), AccessLevel::Owner);
+        assert_eq!(config.scrape.max_posts, 50);
+        assert_eq!(config.scrape.output_dir, "data/scrapes");
+
+        // A nonsense ceiling stops startup rather than exporting nothing.
+        let mut broken = config.clone();
+        broken.scrape.max_posts = 0;
+        assert!(broken.validate().is_err());
+        let mut broken = config.clone();
+        broken.scrape.output_dir = "  ".to_owned();
+        assert!(broken.validate().is_err());
+
+        // A disabled section is never validated, so it cannot block startup.
+        let mut disabled = config;
+        disabled.scrape.enabled = false;
+        disabled.scrape.max_posts = 0;
+        assert!(disabled.validate().is_ok());
     }
 
     #[test]

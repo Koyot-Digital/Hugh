@@ -324,6 +324,7 @@ fn action_icon(action: &str) -> &'static str {
         "channel_locked" => "lock",
         "command_blocked" => "denied",
         "rotector_match" | "lookup_pinned" => "flagged",
+        "forum_exported" => "forum",
         _ => "case",
     }
 }
@@ -353,6 +354,7 @@ fn action_phrase(action: &str) -> String {
         "configuration_failed" => "Setup failed",
         "rotector_match" => "Rotector flagged this account",
         "lookup_pinned" => "Lookup pinned to the mod log",
+        "forum_exported" => "Forum posts exported",
         other => return title_case(other),
     }
     .to_owned()
@@ -360,9 +362,15 @@ fn action_phrase(action: &str) -> String {
 
 /// Reading order for the details block: what happened, then the counts that
 /// explain it, then the bookkeeping identifiers.
-const DETAIL_ORDER: [&str; 24] = [
+const DETAIL_ORDER: [&str; 30] = [
     "source",
     "command",
+    "forum_name",
+    "posts",
+    "images",
+    "replies",
+    "archived_included",
+    "replies_included",
     "target_user_id",
     "lookup",
     "target",
@@ -490,6 +498,11 @@ fn detail_label(key: &str) -> String {
         "reason_types" => "Finding types",
         "lookup" => "Lookup",
         "verdict" => "Verdict",
+        "forum_name" => "Forum",
+        "posts" => "Posts exported",
+        "archived_included" => "Archived posts included",
+        "replies_included" => "Replies captured",
+        "export_file" => "Export",
         other => return title_case(other),
     }
     .to_owned()
