@@ -23,9 +23,9 @@ The current core protects against:
 
 Every threshold is configured in one TOML file. Trusted users and roles can be
 exempted, command access is set per command across five staff tiers, all
-enforcement is limited to one guild, and significant actions are delivered as
-numbered webhook cases and written to both structured logs and an append-only
-JSONL incident log.
+enforcement is limited to one guild, and significant actions are posted as
+numbered cases to a private staff channel and written to both structured logs
+and an append-only JSONL incident log.
 
 Case reports are written to be read: an icon and plain-English outcome lead the
 title, the subject's avatar anchors the card, every clickable reference sits on
@@ -40,11 +40,12 @@ owner-only `/scrape` export, whose purpose is to copy a forum's posts out.
 1. Install stable Rust (1.97 or newer) and create a Discord application/bot.
 2. Copy `config.example.toml` to `config.toml` and fill in the server, channel,
    and role IDs.
-3. Create a private incident webhook, then enable the **Server Members Intent**
-   and **Message Content Intent** in the Discord Developer Portal.
+3. Create a private staff channel for case cards and set `incident_channel_id`,
+   then enable the **Server Members Intent** and **Message Content Intent** in
+   the Discord Developer Portal.
 4. Invite Hugh with the permissions listed in [the setup guide](docs/setup.md).
-5. Set `DISCORD_TOKEN` and `HUGH_INCIDENT_WEBHOOK_URL` (plus
-   `HUGH_ROTECTOR_API_KEY` if you enable `[rotector]`), then start the bot:
+5. Set `DISCORD_TOKEN` (plus `HUGH_ROTECTOR_API_KEY` if you enable
+   `[rotector]`), then start the bot:
 
    ```text
    cargo run --release -- --config config.toml

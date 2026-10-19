@@ -10,6 +10,7 @@ integer value.
 | Key | Meaning |
 | --- | --- |
 | `guild_id` | The only server Hugh accepts events from. |
+| `incident_channel_id` | Required private staff channel Hugh posts case cards to, under its own identity. It needs View Channel, Send Messages and Embed Links there. |
 | `incident_log_path` | Append-only JSONL audit file. Default: `data/incidents.jsonl`. |
 | `trusted_user_ids` | Users that bypass message and account-age guards. It does not grant protected roles. |
 | `trusted_role_ids` | Roles that bypass message guards. Use very sparingly. |
@@ -133,7 +134,6 @@ restoration.
 | Variable | Purpose |
 | --- | --- |
 | `DISCORD_TOKEN` | Required bot token. |
-| `HUGH_INCIDENT_WEBHOOK_URL` | Required private Discord webhook URL for incidents. |
 | `HUGH_ROTECTOR_API_KEY` | Required when `[rotector].enabled = true`; sent as the bearer token on Rotector lookups. |
 | `HUGH_CONFIG` | Config path; overridden by `--config`. |
 | `RUST_LOG` | Log filter, such as `hugh=debug,serenity=warn`. |
@@ -186,7 +186,7 @@ moderator who pinned it. The button then disappears, so one card cannot be
 posted twice.
 
 The pinned card is also filed as a numbered case (kind `rotector_lookup`,
-action `lookup_pinned`) in the incident log and the incident webhook, recording
+action `lookup_pinned`) in the incident log and the incident channel, recording
 who pinned it, where, and the ID of the public message.
 
 Hugh needs **Send Messages** and **Embed Links** in the channel where the button
@@ -290,7 +290,9 @@ safe = "<:badge_check:123456789012345678>"
 Values are emoji, not names — use `<:name:id>` for a static emoji and
 `<a:name:id>` for an animated one. With Developer Mode on, right-click an
 uploaded emoji and copy its ID, or type `\:name:` in Discord to reveal the full
-form. An unknown slot name stops startup; the slots are:
+form. A bare `:name:` shortcode stops startup, because Discord expands
+shortcodes only in its own message box and a bot sending one would have it
+printed verbatim. An unknown slot name stops startup too; the slots are:
 
 | Slot | Where it appears | Lucide icon to upload |
 | --- | --- | --- |

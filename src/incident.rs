@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serenity::{
-    all::{Colour, Http, Timestamp, User, Webhook},
+    all::{ChannelId, Colour, Http, Timestamp, User},
     builder::{
-        CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, ExecuteWebhook,
+        CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, CreateMessage,
     },
 };
 use tokio::{
@@ -98,16 +98,16 @@ pub struct IncidentSink {
 
 pub struct IncidentReporter {
     sink: IncidentSink,
-    webhook: Webhook,
+    channel_id: ChannelId,
     config: Arc<Config>,
 }
 
 impl IncidentReporter {
     #[must_use]
-    pub const fn new(sink: IncidentSink, webhook: Webhook, config: Arc<Config>) -> Self {
+    pub const fn new(sink: IncidentSink, channel_id: ChannelId, config: Arc<Config>) -> Self {
         Self {
             sink,
-            webhook,
+            channel_id,
             config,
         }
     }
@@ -147,15 +147,17 @@ impl IncidentReporter {
         let mut embeds = vec![incident_embed(&incident, &self.config)];
         // Discord accepts ten embeds per message; the case header takes one.
         embeds.extend(attached.into_iter().take(9));
-        let message = ExecuteWebhook::new()
-            .username("Hugh Security")
+        // Hugh posts the card itself: a webhook cannot resolve the custom emoji
+        // behind the icon slots, and its delivery ignores channel permissions.
+        let message = CreateMessage::new()
             .allowed_mentions(CreateAllowedMentions::new())
             .embeds(embeds);
-        if let Err(error) = self.webhook.execute(http, false, message).await {
+        if let Err(error) = self.channel_id.send_message(http, message).await {
             warn!(
                 case_id = incident.case_id,
+                channel_id = self.channel_id.get(),
                 ?error,
-                "failed to deliver incident webhook"
+                "failed to post the case card; the JSONL copy is still on disk"
             );
         }
         incident.case_id

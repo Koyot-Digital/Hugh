@@ -800,7 +800,9 @@ mod tests {
     }
 
     fn config(extra: &str) -> Config {
-        let base = format!("guild_id = \"1\"\n\n[role_guard]\nenabled = false\n\n{extra}");
+        let base = format!(
+            "guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[role_guard]\nenabled = false\n\n{extra}"
+        );
         let config: Config = toml::from_str(&base).unwrap();
         config.validate().unwrap();
         config

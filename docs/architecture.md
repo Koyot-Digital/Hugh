@@ -22,7 +22,7 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
 - `scrape.rs` pages a forum channel and serialises its posts as JSON Lines.
 - `quarantine.rs` maintains an append-only role recovery journal.
 - `incident.rs` assigns durable case numbers, writes machine-readable records,
-  and renders moderator-friendly webhook reports.
+  and renders moderator-friendly case cards that Hugh posts itself.
 
 Detector code does not call Discord. This keeps threshold behavior cheap to
 test and lets future frontends reuse the same policy. Discord API failures never

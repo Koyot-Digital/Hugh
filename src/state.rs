@@ -333,6 +333,7 @@ mod tests {
     fn config() -> Config {
         Config {
             guild_id: 1,
+            incident_channel_id: Some(2),
             incident_log_path: "ignored".into(),
             trusted_user_ids: HashSet::new(),
             trusted_role_ids: HashSet::new(),

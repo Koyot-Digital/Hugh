@@ -27,13 +27,17 @@ Versioning and the Keep a Changelog format.
 - Edited-message scanning, repeated-mention counting, coordinated multi-account
   spam detection, content limits, blocked domains, and standalone new-account
   screening.
-- Webhook incident delivery with a local JSONL fallback.
+- Case delivery to a private staff channel with a local JSONL fallback.
 - `/lock`, `/banish`, `/unbanish`, `/help`, and `/hugh` guild commands.
 - Durable quarantine role snapshots and automatic channel isolation.
 - A project introduction when Hugh is mentioned.
 
 ### Changed
 
+- Hugh posts case cards itself, to the new required `incident_channel_id`,
+  instead of through a webhook. A webhook cannot resolve the custom emoji
+  configured in `[icons]`, so every icon arrived as literal `:name:` text in
+  the case log. Hugh needs View Channel, Send Messages and Embed Links there.
 - Case and lookup cards redesigned: icon-led titles, member avatars as the card
   author and thumbnail, Roblox headshots on Roblox lookups, one line of
   clickable references instead of three fields, and a configurable `[icons]`
@@ -45,6 +49,8 @@ Versioning and the Keep a Changelog format.
 
 ### Removed
 
+- `HUGH_INCIDENT_WEBHOOK_URL`, replaced by `incident_channel_id` in
+  `config.toml`.
 - The `/talk` command, the OpenAI integration behind it, and `OPENAI_API_KEY`.
   Hugh no longer calls any AI service.
 

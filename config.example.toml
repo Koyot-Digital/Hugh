@@ -1,5 +1,11 @@
 # Discord snowflakes must be quoted so no TOML parser can lose integer precision.
 guild_id = "123456789012345678"
+
+# Private staff channel Hugh posts case cards to. Hugh posts them under its own
+# identity, so it needs View Channel, Send Messages and Embed Links there, and
+# the custom emoji in [icons] resolve the way they do anywhere else it speaks.
+incident_channel_id = "123456789012345681"
+
 incident_log_path = "data/incidents.jsonl"
 
 # Users with these IDs bypass message and account-age guards. Protected-role

@@ -8,9 +8,9 @@
    not used and should remain disabled.
 4. Never paste the token into `config.toml`, a commit, an issue, or a log.
 
-Create a webhook in a private staff incident channel under **Edit Channel >
-Integrations > Webhooks**. Protect its URL like the bot token: anyone with that
-URL can post through the webhook.
+Create a private staff channel for case cards and put its ID in
+`incident_channel_id`. Hugh posts the cards itself, under its own identity, so
+no webhook is involved.
 
 ## 2. Invite Hugh
 
@@ -19,9 +19,11 @@ scopes and these bot permissions:
 
 - View Channels
 - Send Messages
+- Embed Links, which case and lookup cards need
 - Read Message History
 - Manage Messages
 - Moderate Members
+- Use External Emojis if the `[icons]` emoji live in another server
 - Kick Members if either account-age action is `"kick"`
 - Manage Roles if the role guard or quarantine is enabled
 - Manage Channels for `/lock` and quarantine isolation
@@ -32,10 +34,11 @@ Place Hugh's Discord role above every member it may time out or kick and above
 every role it must remove. Discord's role hierarchy applies even if the matching
 permission is present.
 
-Restrict the webhook's incident channel so only appropriate staff can view it.
-Reports are durable numbered cases and include user identity, moderator,
-reason, action outcome, channel, and relevant evidence. A local JSONL copy
-remains available if webhook delivery fails.
+Restrict the incident channel so only appropriate staff can view it, and keep
+Hugh's own View Channel, Send Messages and Embed Links intact there. Reports are
+durable numbered cases and include user identity, moderator, reason, action
+outcome, channel, and relevant evidence. A local JSONL copy remains available if
+posting fails.
 
 ## 3. Quarantine resources
 
@@ -78,7 +81,6 @@ Linux/macOS:
 
 ```text
 export DISCORD_TOKEN='replace-me'
-export HUGH_INCIDENT_WEBHOOK_URL='https://discord.com/api/webhooks/...'
 # Only while [rotector] is enabled:
 export HUGH_ROTECTOR_API_KEY='replace-me'
 cargo run --release -- --config config.toml
@@ -88,7 +90,6 @@ PowerShell:
 
 ```powershell
 $env:DISCORD_TOKEN = 'replace-me'
-$env:HUGH_INCIDENT_WEBHOOK_URL = 'https://discord.com/api/webhooks/...'
 # Only while [rotector] is enabled:
 $env:HUGH_ROTECTOR_API_KEY = 'replace-me'
 cargo run --release -- --config config.toml

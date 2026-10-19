@@ -19,9 +19,8 @@ incident plan.
 
 Use a service secret/environment variable. Restrict who can inspect the service
 environment and logs. If a token is exposed, reset it immediately in the
-Developer Portal and restart Hugh. The token and incident webhook URL are never
-intentionally logged or written to the incident file. Rotate the webhook as
-well as the token if either is exposed.
+Developer Portal and restart Hugh. The token is never intentionally logged or
+written to the incident file.
 
 ## Incident records
 
@@ -32,17 +31,17 @@ flag), the reason, channel ID, and small structured evidence. Message bodies,
 URL paths or queries, email addresses, tokens, and attachment contents are not
 stored.
 
-The same case is delivered through the configured Discord webhook as a card
+The same case is posted by Hugh to `incident_channel_id` as a card
 built for reading rather than parsing: the title states the outcome in plain
 English ("Case #42 · Message deleted · member timed out"), the description gives
 the reason, and the details block renders each piece of evidence with a human
 label, durations as "10 minutes", role IDs as role mentions, and empty or
 duplicated entries dropped. The JSONL record keeps the raw codes, so dashboards
-are unaffected. Mentions are disabled on webhook delivery, so a report does not
+are unaffected. Mentions are disabled on delivery, so a report does not
 ping its subject or moderator. Protect
-the file and webhook channel as moderation data, rotate the file using the
-host's normal log rotation, and set a suitable retention period. Webhook
-delivery failure is logged locally; it does not suppress enforcement. Case
+the file and incident channel as moderation data, rotate the file using the
+host's normal log rotation, and set a suitable retention period. A failure to
+post is logged locally; it does not suppress enforcement. Case
 numbers continue from the greatest valid `case_id` in the existing JSONL file.
 
 `data/quarantine.jsonl` contains the user and role IDs needed for recovery. Do
@@ -70,7 +69,7 @@ able to take one at all.
 1. Configure only known IDs and validate with `--check-config`.
 2. Start raid and standalone new-account protection in `log` mode.
 3. Exercise each rule with test accounts beneath Hugh in the role hierarchy.
-4. Confirm the incident webhook and JSONL record show the expected result.
+4. Confirm the incident channel and JSONL record show the expected result.
 5. Tune using normal traffic before enabling either account-age timeout/kick.
 6. Test `/banish` and `/unbanish` with expendable roles, including a restart
    between those commands.

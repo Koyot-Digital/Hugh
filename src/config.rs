@@ -13,6 +13,11 @@ use url::Url;
 pub struct Config {
     #[serde(deserialize_with = "snowflake")]
     pub guild_id: u64,
+    /// Private staff channel Hugh posts case cards to. Hugh sends them under
+    /// its own identity rather than through a webhook, so custom emoji and the
+    /// server's own permissions apply.
+    #[serde(default, deserialize_with = "optional_snowflake")]
+    pub incident_channel_id: Option<u64>,
     #[serde(default = "default_incident_path")]
     pub incident_log_path: String,
     #[serde(default, deserialize_with = "snowflakes")]
@@ -357,6 +362,19 @@ pub const ICONS: [(&str, &str); 28] = [
     ("image", "🖼️"),
 ];
 
+/// Whether a value is a bare `:name:` emoji shortcode. Discord expands those
+/// only in its own message box, so one in the config would be printed verbatim
+/// on every card the slot appears on.
+fn is_emoji_shortcode(value: &str) -> bool {
+    let Some(name) = value
+        .strip_prefix(':')
+        .and_then(|rest| rest.strip_suffix(':'))
+    else {
+        return false;
+    };
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Commands Hugh knows about, with the tier each one needs by default.
 pub const COMMAND_LEVELS: [(&str, AccessLevel); 7] = [
     ("help", AccessLevel::Everyone),
@@ -467,6 +485,13 @@ impl Config {
         if self.incident_log_path.trim().is_empty() {
             bail!("incident_log_path must not be empty");
         }
+        match self.incident_channel_id {
+            None => bail!(
+                "incident_channel_id is not set; Hugh posts case cards there itself, so set it to a private staff channel (see docs/setup.md)"
+            ),
+            Some(0) => bail!("incident_channel_id must be a non-zero Discord ID"),
+            Some(_) => {}
+        }
         positive(
             "mentions.protected_role_max_pings",
             &self.mentions.protected_role_max_pings,
@@ -558,6 +583,11 @@ impl Config {
             let value = value.trim();
             if value.is_empty() || value.chars().count() > 64 {
                 bail!("icons.{key} must contain 1 to 64 characters");
+            }
+            if is_emoji_shortcode(value) {
+                bail!(
+                    "icons.{key} is the shortcode {value:?}, which Discord expands only in its                      own message box; paste the emoji itself as <:name:id>, or <a:name:id> for                      an animated one (see docs/configuration.md)"
+                );
             }
         }
         Ok(())
@@ -739,6 +769,7 @@ mod tests {
     fn rejects_unknown_keys() {
         let result = toml::from_str::<Config>(
             r#"guild_id = "1"
+incident_channel_id = "2"
 surprise = true"#,
         );
         assert!(result.is_err());
@@ -748,6 +779,7 @@ surprise = true"#,
     fn trusted_role_grants_bypass() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 trusted_role_ids = ["99"]"#,
         )
         .unwrap();
@@ -760,6 +792,7 @@ trusted_role_ids = ["99"]"#,
     fn quarantine_can_auto_provision_without_ids() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [quarantine]
 enabled = true"#,
@@ -775,6 +808,7 @@ enabled = true"#,
     fn quarantine_rejects_only_one_pinned_id() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [quarantine]
 enabled = true
@@ -789,6 +823,7 @@ role_id = "2""#,
     fn configured_tiers_outrank_discord_permissions() {
         let config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [role_guard]
 enabled = false
@@ -832,6 +867,7 @@ check = "helper""#,
     fn trusted_users_reach_the_highest_tier() {
         let config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 trusted_user_ids = ["9"]
 
 [role_guard]
@@ -845,9 +881,53 @@ enabled = false"#,
     }
 
     #[test]
+    fn incident_channel_is_required() {
+        let mut config: Config = toml::from_str(r#"guild_id = "1""#).unwrap();
+        config.role_guard.enabled = false;
+        let message = config.validate().unwrap_err().to_string();
+        assert!(message.contains("incident_channel_id"), "{message}");
+
+        config.incident_channel_id = Some(0);
+        assert!(config.validate().is_err());
+        config.incident_channel_id = Some(2);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn icon_shortcodes_are_rejected() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+incident_channel_id = "2"
+
+[icons]
+timeout = ":timeout:""#,
+        )
+        .unwrap();
+        config.role_guard.enabled = false;
+        let message = config.validate().unwrap_err().to_string();
+        assert!(message.contains("icons.timeout"), "{message}");
+        assert!(message.contains("<:name:id>"), "{message}");
+    }
+
+    #[test]
+    fn icon_custom_emoji_markup_is_accepted() {
+        let mut config: Config = toml::from_str(
+            r#"guild_id = "1"
+incident_channel_id = "2"
+
+[icons]
+timeout = "<:timeout:123456789012345678>""#,
+        )
+        .unwrap();
+        config.role_guard.enabled = false;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn unknown_command_names_are_rejected() {
         let config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [role_guard]
 enabled = false
@@ -863,6 +943,7 @@ lockdown = "admin""#,
     fn rotector_requires_a_usable_base_url() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [role_guard]
 enabled = false
@@ -882,6 +963,7 @@ base_url = "roscoe.rayward.app""#,
     fn scrape_is_owner_only_and_bounded() {
         let config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [role_guard]
 enabled = false
@@ -914,6 +996,7 @@ max_posts = 50"#,
     fn blocked_domains_must_be_bare_hosts() {
         let mut config: Config = toml::from_str(
             r#"guild_id = "1"
+incident_channel_id = "2"
 
 [content]
 blocked_domains = ["https://bad.example/path"]"#,

@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(config.icon("not-a-slot"), "");
 
         let custom: Config = toml::from_str(
-            "guild_id = \"1\"\n\n[icons]\nflagged = \"<:shield_alert:123456789012345678>\"",
+            "guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[icons]\nflagged = \"<:shield_alert:123456789012345678>\"",
         )
         .unwrap();
         custom.validate().unwrap();

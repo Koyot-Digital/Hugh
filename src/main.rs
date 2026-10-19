@@ -15,7 +15,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 use serenity::{
     Client,
-    all::{GatewayIntents, Http, Webhook},
+    all::{ChannelId, GatewayIntents},
 };
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -57,20 +57,16 @@ async fn main() -> Result<()> {
         bail!("DISCORD_TOKEN must not be empty");
     }
 
-    let webhook_url =
-        env::var("HUGH_INCIDENT_WEBHOOK_URL").context("HUGH_INCIDENT_WEBHOOK_URL is not set")?;
-    if webhook_url.trim().is_empty() {
-        bail!("HUGH_INCIDENT_WEBHOOK_URL must not be empty");
-    }
-    let bootstrap_http = Http::new(&token);
-    let webhook = Webhook::from_url(&bootstrap_http, &webhook_url)
-        .await
-        .context("failed to load the incident webhook; check its URL")?;
-    drop(webhook_url);
-
+    // Validation guarantees the channel; Hugh posts its own case cards so the
+    // icon emoji resolve and the channel's permissions apply.
+    let incident_channel = ChannelId::new(
+        config
+            .incident_channel_id
+            .context("incident_channel_id is not set")?,
+    );
     let incidents = IncidentReporter::new(
         IncidentSink::open(&config.incident_log_path).await?,
-        webhook,
+        incident_channel,
         Arc::clone(&config),
     );
     let quarantine = if config.quarantine.enabled {
@@ -113,7 +109,11 @@ async fn main() -> Result<()> {
 
     // Drop our bootstrap copy; Serenity retains the authentication material it needs.
     drop(token);
-    info!(guild_id = config.guild_id, "starting Hugh");
+    info!(
+        guild_id = config.guild_id,
+        incident_channel_id = incident_channel.get(),
+        "starting Hugh"
+    );
 
     tokio::select! {
         result = client.start() => result.context("Discord gateway stopped unexpectedly")?,
