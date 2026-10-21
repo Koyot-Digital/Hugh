@@ -28,6 +28,21 @@ pub struct UserSnapshot {
     pub bot: bool,
 }
 
+impl UserSnapshot {
+    /// A stand-in for somebody Hugh can act on but cannot see, such as an
+    /// account banned by ID after it has already left.
+    #[must_use]
+    pub fn placeholder(id: u64) -> Self {
+        Self {
+            id,
+            username: format!("unknown-{id}"),
+            display_name: None,
+            avatar_url: String::new(),
+            bot: false,
+        }
+    }
+}
+
 impl From<&User> for UserSnapshot {
     fn from(user: &User) -> Self {
         Self {
@@ -96,6 +111,7 @@ pub struct IncidentSink {
     writer: Arc<Mutex<IncidentWriter>>,
 }
 
+#[derive(Debug, Clone)]
 pub struct IncidentReporter {
     sink: IncidentSink,
     channel_id: ChannelId,
@@ -317,12 +333,17 @@ fn action_icon(action: &str) -> &'static str {
     match action {
         "message_deleted" | "delete_failed" => "deleted",
         "message_deleted_and_member_timed_out" | "timed_out" => "timeout",
-        "kicked" => "kicked",
+        "kicked" | "member_kicked" | "message_deleted_and_member_kicked" => "kicked",
+        "member_warned" => "warn",
+        "member_banned" | "member_temporarily_banned" | "message_deleted_and_member_banned" => {
+            "ban"
+        }
+        "member_unbanned" | "ban_expired" => "unban",
+        "warning_revoked" | "channel_unlocked" | "member_released" => "release",
         "raid_mode_enabled" => "raid",
         "logged" => "review",
         "roles_removed" => "role",
         "member_banished" => "quarantine",
-        "member_released" => "release",
         "channel_locked" => "lock",
         "command_blocked" => "denied",
         "rotector_match" | "lookup_pinned" => "flagged",
@@ -344,13 +365,24 @@ fn action_phrase(action: &str) -> String {
         "raid_mode_enabled" => "Raid mode enabled",
         "logged" => "Logged for review, nothing enforced",
         "timed_out" => "Member timed out",
-        "kicked" => "Member kicked",
+        "kicked" | "member_kicked" => "Member kicked",
         "roles_removed" => "Protected roles removed",
         "role_removal_failed" => "Protected roles could not be removed",
         "member_banished" => "Member quarantined",
         "member_partially_banished" => "Member quarantined · roles left behind",
         "member_released" => "Member released from quarantine",
         "channel_locked" => "Channel locked",
+        "channel_unlocked" => "Channel unlocked",
+        "member_warned" => "Member warned",
+        "warning_revoked" => "Case taken back",
+        "member_banned" => "Member banned",
+        "member_temporarily_banned" => "Member banned temporarily",
+        "member_unbanned" => "Ban lifted",
+        "ban_expired" => "Temporary ban expired",
+        "ban_expiry_failed" => "Temporary ban could not be lifted",
+        "message_deleted_and_member_kicked" => "Message deleted · member kicked",
+        "message_deleted_and_member_banned" => "Message deleted · member banned",
+        "escalation_failed" => "Automod escalation failed",
         "command_failed" => "Command failed",
         "command_blocked" => "Command blocked",
         "configuration_failed" => "Setup failed",
@@ -364,9 +396,10 @@ fn action_phrase(action: &str) -> String {
 
 /// Reading order for the details block: what happened, then the counts that
 /// explain it, then the bookkeeping identifiers.
-const DETAIL_ORDER: [&str; 30] = [
+const DETAIL_ORDER: [&str; 42] = [
     "source",
     "command",
+    "punishment",
     "forum_name",
     "posts",
     "images",
@@ -374,6 +407,10 @@ const DETAIL_ORDER: [&str; 30] = [
     "archived_included",
     "replies_included",
     "target_user_id",
+    "standing",
+    "weight",
+    "recent_weight",
+    "escalated",
     "lookup",
     "target",
     "verdict",
@@ -384,16 +421,23 @@ const DETAIL_ORDER: [&str; 30] = [
     "link_count",
     "attachment_count",
     "coordinated_users",
+    "hop_channels",
     "blocked_domain",
+    "blocked_phrase",
     "account_age_seconds",
     "joins_in_window",
     "window_seconds",
     "raid_mode_seconds",
+    "duration_seconds",
     "timeout_seconds",
     "timeout_skipped",
+    "original_case",
+    "revoked_case",
     "stored_role_ids",
     "restored_role_ids",
     "removed_role_ids",
+    "locked_role_ids",
+    "bypass_role_ids",
     "message_id",
 ];
 
@@ -451,7 +495,7 @@ fn format_detail_text(key: &str, text: &str) -> String {
         },
         "command" => format!("`/{text}`"),
         "lookup" => title_case(&text),
-        "target" | "blocked_domain" => format!("`{text}`"),
+        "target" | "blocked_domain" | "blocked_phrase" => format!("`{text}`"),
         _ => text,
     }
 }
@@ -495,6 +539,18 @@ fn detail_label(key: &str) -> String {
         "failed_role_ids" => "Roles Hugh could not change",
         "missing_role_ids" => "Deleted roles skipped",
         "target_user_id" => "Target",
+        "punishment" => "Punishment",
+        "duration_seconds" => "Length",
+        "standing" => "Standing now",
+        "weight" => "Standing cost",
+        "recent_weight" => "Recent automod weight",
+        "escalated" => "Escalated to",
+        "hop_channels" => "Channels the message reached",
+        "blocked_phrase" => "Blocked phrase",
+        "original_case" => "Original case",
+        "revoked_case" => "Case taken back",
+        "locked_role_ids" => "Roles silenced",
+        "bypass_role_ids" => "Roles left able to speak",
         "required_level" => "Level required",
         "held_level" => "Level held",
         "reason_types" => "Finding types",
@@ -510,7 +566,7 @@ fn detail_label(key: &str) -> String {
     .to_owned()
 }
 
-fn human_duration(seconds: u64) -> String {
+pub fn human_duration(seconds: u64) -> String {
     let mut remaining = seconds;
     let mut parts = Vec::new();
     for (size, singular) in [
@@ -675,7 +731,18 @@ mod tests {
             .details
             .insert("timeout_seconds".into(), serde_json::json!(600));
 
-        let config: Config = toml::from_str("guild_id = \"1\"").unwrap();
+        let config: Config = toml::from_str(
+            "guild_id = \"1\"
+
+[icons]
+timeout = \"⏳\"
+reason = \"📝\"
+member = \"👤\"
+channel = \"#️⃣\"
+moderator = \"🛡️\"
+details = \"🔎\"",
+        )
+        .unwrap();
         let embed = serde_json::to_value(incident_embed(&incident, &config)).unwrap();
 
         // The outcome's icon leads the title, so a scanning moderator sees the

@@ -7,6 +7,30 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
+- A durable moderation record behind `/warn`, `/kick`, `/ban`, `/unban`,
+  `/unwarn`, `/modlogs` and `/standing`. Warnings, timeouts, kicks, bans and
+  automod hits are all filed as numbered cases, `/ban` accepts a length such as
+  `1h30m` or `7d`, and Hugh lifts a temporary ban by itself when the time is
+  up. A case can be taken back with `/unwarn` so it stops counting.
+- **Standing**: one score per member out of `standing.starting_points` that
+  every punishment takes weight off and that fades back over
+  `standing.decay_days`. Standing picks a band, and the band scales the automod
+  limits and timeout lengths that member is held to, so a good record earns
+  more room and a bad one trips the guards sooner.
+- Automatic escalation. Hugh adds each automod hit's weight to a rolling
+  per-member total and steps up from deletion to timeout, kick and ban as that
+  total passes the `[escalation]` thresholds, one step at a time.
+- Automod guards for shouting, character padding, emoji floods, zalgo text,
+  configurable blocked phrases, one message walked across several channels, and
+  links posted by accounts created minutes ago.
+- `/unlock`, which removes only what `/lock` took and leaves every other
+  permission setting on the channel alone. Both now act on the roles named in
+  `[lock]`, falling back to `@everyone`, and `lock.bypass_role_ids` keeps staff
+  talking in a locked channel.
+- An optional `[welcome]` greeting for new members, with `{user}`,
+  `{username}`, `{display}`, `{server}`, `{count}`, `{ordinal}` and `{id}`
+  placeholders. It stays quiet during a raid and for anyone Hugh has just
+  removed.
 - `/scrape`, an owner-only forum export: every post's title, opening message,
   author, tags, timestamps and images written as JSON Lines, one
   self-contained record per post, attached to the reply and saved under
@@ -34,6 +58,9 @@ Versioning and the Keep a Changelog format.
 
 ### Changed
 
+- Staff can no longer act on a member at or above their own tier.
+- Unset icon slots now render as nothing at all. Hugh previously substituted a
+  plain emoji of its own, which sat oddly beside a server's own branding.
 - Hugh posts case cards itself, to the new required `incident_channel_id`,
   instead of through a webhook. A webhook cannot resolve the custom emoji
   configured in `[icons]`, so every icon arrived as literal `:name:` text in

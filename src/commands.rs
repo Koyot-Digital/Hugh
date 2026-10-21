@@ -16,8 +16,10 @@ use tracing::{error, info};
 
 use crate::{
     config::{AccessLevel, Config, DiscordPowers},
+    discipline,
     incident::{Incident, IncidentReporter},
     lookup,
+    moderation::ModerationStore,
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
     scrape,
@@ -43,9 +45,11 @@ fn moderation_permissions() -> Permissions {
 /// Discord moderation permissions can still use it.
 fn discord_gate(command: &str) -> Option<Permissions> {
     match command {
-        "lock" => Some(Permissions::MANAGE_CHANNELS),
+        "lock" | "unlock" => Some(Permissions::MANAGE_CHANNELS),
         "banish" | "unbanish" => Some(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS),
-        "check" => Some(Permissions::MODERATE_MEMBERS),
+        "check" | "modlogs" | "standing" | "warn" | "unwarn" => Some(Permissions::MODERATE_MEMBERS),
+        "kick" => Some(Permissions::KICK_MEMBERS),
+        "ban" | "unban" => Some(Permissions::BAN_MEMBERS),
         // A bulk export of member content is an owner's tool, so without
         // configured tiers Discord shows it to administrators only.
         "scrape" => Some(Permissions::ADMINISTRATOR),
@@ -79,11 +83,22 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
         (
             "lock",
             CreateCommand::new("lock")
-                .description("Lock a channel so regular members cannot send messages")
+                .description("Lock a channel so the restricted roles cannot send messages")
                 .add_option(CreateCommandOption::new(
                     CommandOptionType::Channel,
                     "channel",
                     "Channel to lock; defaults to the current channel",
+                ))
+                .add_option(reason()),
+        ),
+        (
+            "unlock",
+            CreateCommand::new("unlock")
+                .description("Unlock a channel Hugh locked, restoring the inherited permissions")
+                .add_option(CreateCommandOption::new(
+                    CommandOptionType::Channel,
+                    "channel",
+                    "Channel to unlock; defaults to the current channel",
                 ))
                 .add_option(reason()),
         ),
@@ -124,6 +139,9 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
             CreateCommand::new("hugh").description("Learn about Hugh and its development"),
         ),
     ];
+    if config.moderation.enabled {
+        commands.extend(discipline::commands());
+    }
     if config.rotector.enabled {
         commands.push(("check", lookup::command()));
     }
@@ -151,15 +169,26 @@ pub async fn register(ctx: &Context, config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle(
-    ctx: &Context,
-    interaction: Interaction,
-    config: &Config,
-    store: Option<&QuarantineStore>,
-    resources: &QuarantineManager,
-    incidents: &IncidentReporter,
-    rotector: Option<&RotectorClient>,
-) {
+/// Everything a command may reach for, held by the handler and lent to the
+/// dispatcher as one piece so adding a command does not lengthen its signature.
+pub struct Services<'a> {
+    pub config: &'a Config,
+    pub quarantine: Option<&'a QuarantineStore>,
+    pub quarantine_resources: &'a QuarantineManager,
+    pub incidents: &'a IncidentReporter,
+    pub rotector: Option<&'a RotectorClient>,
+    pub moderation: &'a ModerationStore,
+}
+
+pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services<'_>) {
+    let &Services {
+        config,
+        quarantine: store,
+        quarantine_resources: resources,
+        incidents,
+        rotector,
+        moderation,
+    } = services;
     let command = match interaction {
         Interaction::Command(command) => command,
         Interaction::Component(component) => {
@@ -181,11 +210,15 @@ pub async fn handle(
         return;
     }
     let result = match name.as_str() {
-        "lock" => lock(ctx, &command, config, incidents).await,
+        "lock" => lock(ctx, &command, config, incidents, true).await,
+        "unlock" => lock(ctx, &command, config, incidents, false).await,
         "banish" => banish(ctx, &command, config, store, resources, incidents).await,
         "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
         "check" => lookup::handle(ctx, &command, config, rotector, incidents).await,
         "scrape" => scrape::handle(ctx, &command, config, incidents).await,
+        "warn" | "kick" | "ban" | "unban" | "unwarn" | "modlogs" | "standing" => {
+            discipline::handle(ctx, &command, config, moderation, incidents).await
+        }
         "help" => help(ctx, &command, config).await,
         "hugh" => about(ctx, &command).await,
         _ => Ok(()),
@@ -222,11 +255,25 @@ pub async fn handle(
     }
 }
 
+/// Permissions a lock takes away. Threads and reactions go with sending, or a
+/// locked channel is still a channel people can talk in.
+fn locked_permissions() -> Permissions {
+    Permissions::SEND_MESSAGES
+        | Permissions::SEND_MESSAGES_IN_THREADS
+        | Permissions::CREATE_PUBLIC_THREADS
+        | Permissions::CREATE_PRIVATE_THREADS
+        | Permissions::ADD_REACTIONS
+}
+
+/// Locks or unlocks a channel for the roles named in `[lock]`, falling back to
+/// `@everyone` when that section lists none. Unrelated permission settings on
+/// the channel are left exactly as they were.
 async fn lock(
     ctx: &Context,
     command: &CommandInteraction,
     config: &Config,
     incidents: &IncidentReporter,
+    locking: bool,
 ) -> Result<()> {
     command.defer_ephemeral(&ctx.http).await?;
     let guild_id = command.guild_id.context("this command is server-only")?;
@@ -236,34 +283,93 @@ async fn lock(
         _ => bail!("the selected channel does not belong to this server"),
     };
 
-    let blocked = Permissions::SEND_MESSAGES
-        | Permissions::SEND_MESSAGES_IN_THREADS
-        | Permissions::CREATE_PUBLIC_THREADS
-        | Permissions::CREATE_PRIVATE_THREADS
-        | Permissions::ADD_REACTIONS;
-    apply_overwrite(
-        &ctx.http,
-        &channel,
-        PermissionOverwriteType::Role(RoleId::new(guild_id.get())),
-        Permissions::empty(),
-        blocked,
-    )
-    .await?;
+    let mut targets: Vec<u64> = config.lock.restricted_role_ids.iter().copied().collect();
+    targets.sort_unstable();
+    if targets.is_empty() {
+        targets.push(guild_id.get());
+    }
+    let blocked = locked_permissions();
+    let mut bypassed: Vec<u64> = config
+        .lock
+        .bypass_role_ids
+        .iter()
+        .copied()
+        .filter(|role| !targets.contains(role))
+        .collect();
+    bypassed.sort_unstable();
 
-    let reason =
-        option_string(&command.data.options, "reason").unwrap_or("Channel locked by a moderator");
-    let mut incident = Incident::new("channel_lock", config.guild_id, "channel_locked", reason);
+    for role in &targets {
+        let kind = PermissionOverwriteType::Role(RoleId::new(*role));
+        if locking {
+            apply_overwrite(&ctx.http, &channel, kind, Permissions::empty(), blocked).await?;
+        } else {
+            release_overwrite(&ctx.http, &channel, kind, blocked).await?;
+        }
+    }
+    // An explicit allow outranks the deny above it, so staff keep talking in a
+    // locked channel without Hugh having to guess at their roles.
+    if locking {
+        for role in &bypassed {
+            apply_overwrite(
+                &ctx.http,
+                &channel,
+                PermissionOverwriteType::Role(RoleId::new(*role)),
+                blocked,
+                Permissions::empty(),
+            )
+            .await?;
+        }
+    }
+
+    let (kind, action, fallback) = if locking {
+        (
+            "channel_lock",
+            "channel_locked",
+            "Channel locked by a moderator",
+        )
+    } else {
+        (
+            "channel_unlock",
+            "channel_unlocked",
+            "Channel unlocked by a moderator",
+        )
+    };
+    let reason = option_string(&command.data.options, "reason").unwrap_or(fallback);
+    let mut incident = Incident::new(kind, config.guild_id, action, reason);
     incident.moderator = Some((&command.user).into());
     incident.channel_id = Some(channel_id.get());
+    incident
+        .details
+        .insert("locked_role_ids".into(), serde_json::json!(targets));
+    if locking && !bypassed.is_empty() {
+        incident
+            .details
+            .insert("bypass_role_ids".into(), serde_json::json!(bypassed));
+    }
     incidents.report(&ctx.http, incident).await;
-    command
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new().content(format!(
-                "Locked <#{}>. Existing permission settings were preserved.",
-                channel_id.get()
-            )),
+
+    let who = if config.lock.restricted_role_ids.is_empty() {
+        "everyone".to_owned()
+    } else {
+        targets
+            .iter()
+            .map(|role| format!("<@&{role}>"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let message = if locking {
+        format!(
+            "Locked <#{}> for {who}. Every other permission setting on the channel was left alone.",
+            channel_id.get()
         )
+    } else {
+        format!(
+            "Unlocked <#{}> for {who}; they are back to whatever the category grants them.",
+            channel_id.get()
+        )
+    };
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().content(message))
         .await?;
     Ok(())
 }
@@ -468,14 +574,43 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
         .description("Hugh protects this community from raids, risky new accounts, mention abuse, coordinated spam, unsafe links, malicious invites, and unauthorized role elevation.")
         .field("Public", "`/hugh` — about the project\n`/help` — this guide", false)
         .field(
-            "Moderation",
+            "Channels",
             format!(
-                "`/lock [channel] [reason]` — stop regular members sending ({})\n\
+                "`/lock [channel] [reason]` — stop the restricted roles sending ({})\n\
+                 `/unlock [channel] [reason]` — give the channel back ({})",
+                level("lock"),
+                level("unlock")
+            ),
+            false,
+        )
+        .field(
+            "Members",
+            format!(
+                "`/warn user reason` — record a warning ({})\n\
+                 `/kick user [reason]` — remove them from the server ({})\n\
+                 `/ban user [reason] [length] [delete_days]` — ban, permanently or for a length \
+                 such as `1h30m` or `7d` ({})\n\
+                 `/unban user [reason]` — lift a ban by user ID ({})\n\
                  `/banish user [reason]` — isolate a member and save their roles ({})\n\
                  `/unbanish user [reason]` — restore their roles ({})",
-                level("lock"),
+                level("warn"),
+                level("kick"),
+                level("ban"),
+                level("unban"),
                 level("banish"),
                 level("unbanish")
+            ),
+            false,
+        )
+        .field(
+            "Record",
+            format!(
+                "`/modlogs user` — every case on their record ({})\n\
+                 `/standing [user]` — their standing and the automod strictness it earns ({})\n\
+                 `/unwarn case [reason]` — take a case back so it stops counting ({})",
+                level("modlogs"),
+                level("standing"),
+                level("unwarn")
             ),
             false,
         );
@@ -505,7 +640,17 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
         );
     }
     embed = embed
-        .field("Staff levels", "Access is set per command in Hugh's configuration using the `everyone`, `helper`, `moderator`, `admin`, and `owner` levels. A higher level always satisfies a lower one.", false)
+        .field("Staff levels", "Access is set per command in Hugh's configuration using the `everyone`, `helper`, `moderator`, `admin`, and `owner` levels. A higher level always satisfies a lower one. Nobody can act on a member at or above their own level.", false)
+        .field(
+            "Standing",
+            format!(
+                "Every punishment takes weight off a member's standing, out of {:.0}, and that \
+                 weight fades to nothing over {:.0} days. The worse a member's standing, the \
+                 tighter the automod limits they are held to and the longer their timeouts run.",
+                config.standing.starting_points, config.standing.decay_days
+            ),
+            false,
+        )
         .field("Case logs", "Every enforcement action receives a durable case number with the user, moderator, reason, outcome, channel, and relevant evidence.", false)
         .field("Open source", format!("Contribute or report issues at {REPOSITORY_URL}"), false)
         .colour(0x0058_65F2);
@@ -537,6 +682,36 @@ async fn apply_overwrite(
         .find(|entry| entry.kind == kind);
     let overwrite = merged_overwrite(existing, kind, add_allow, add_deny);
     channel.create_permission(http, overwrite).await?;
+    Ok(())
+}
+
+/// Takes `bits` back out of an overwrite without touching anything else, and
+/// removes the overwrite entirely once nothing is left in it, so an unlocked
+/// channel inherits from its category the way it did before the lock.
+async fn release_overwrite(
+    http: &serenity::all::Http,
+    channel: &GuildChannel,
+    kind: PermissionOverwriteType,
+    bits: Permissions,
+) -> Result<()> {
+    let Some(existing) = channel
+        .permission_overwrites
+        .iter()
+        .find(|entry| entry.kind == kind)
+    else {
+        return Ok(());
+    };
+    let mut allow = existing.allow;
+    let mut deny = existing.deny;
+    allow.remove(bits);
+    deny.remove(bits);
+    if allow.is_empty() && deny.is_empty() {
+        channel.delete_permission(http, kind).await?;
+    } else {
+        channel
+            .create_permission(http, PermissionOverwrite { allow, deny, kind })
+            .await?;
+    }
     Ok(())
 }
 
@@ -608,11 +783,10 @@ pub fn member_level(
     config.access_level(user_id, roles, powers)
 }
 
-fn access_check(command: &CommandInteraction, config: &Config) -> Result<(), Denied> {
-    let required = config.required_level(&command.data.name);
-    if required == AccessLevel::Everyone {
-        return Ok(());
-    }
+/// The staff level of whoever invoked this command, from the roles and
+/// resolved permissions Discord attached to the interaction.
+#[must_use]
+pub fn invoker_level(command: &CommandInteraction, config: &Config) -> AccessLevel {
     let member = command.member.as_ref();
     let roles: Vec<u64> = member.map_or_else(Vec::new, |member| {
         member.roles.iter().map(|role| role.get()).collect()
@@ -620,7 +794,15 @@ fn access_check(command: &CommandInteraction, config: &Config) -> Result<(), Den
     let permissions = member
         .and_then(|member| member.permissions)
         .unwrap_or_default();
-    let held = member_level(config, command.user.id.get(), &roles, permissions);
+    member_level(config, command.user.id.get(), &roles, permissions)
+}
+
+fn access_check(command: &CommandInteraction, config: &Config) -> Result<(), Denied> {
+    let required = config.required_level(&command.data.name);
+    if required == AccessLevel::Everyone {
+        return Ok(());
+    }
+    let held = invoker_level(command, config);
     if held >= required {
         Ok(())
     } else {

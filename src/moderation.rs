@@ -5,7 +5,7 @@
 //! Case numbers come from the incident log, so one number identifies both the
 //! card in the mod log and the row in this record.
 
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{cmp::Reverse, collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -25,9 +25,7 @@ use crate::{
 
 /// Every kind of punishment the record can hold. `Automod` covers one enforced
 /// message, whatever mix of guards it tripped.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Punishment {
     Warn,
@@ -277,7 +275,10 @@ impl ModerationStore {
 
         let mut by_user: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for record in records.values() {
-            by_user.entry(record.user_id).or_default().push(record.case_id);
+            by_user
+                .entry(record.user_id)
+                .or_default()
+                .push(record.case_id);
         }
         let file = OpenOptions::new()
             .create(true)
@@ -318,7 +319,7 @@ impl ModerationStore {
                 user_id: record.user_id.to_string(),
                 kind: record.kind,
                 reason: record.reason.clone(),
-                moderator_id: record.moderator_id.map(u64::to_string),
+                moderator_id: record.moderator_id.map(|id| id.to_string()),
                 at: record.at,
                 duration_seconds: record.duration_seconds,
                 weight: record.weight,
@@ -337,19 +338,19 @@ impl ModerationStore {
     /// A member's cases, newest first.
     pub async fn history(&self, user_id: u64) -> Vec<Record> {
         let inner = self.inner.lock().await;
-        let Some(cases) = inner.by_user.get(&user_id) else {
-            return Vec::new();
-        };
-        let mut history: Vec<Record> = cases
-            .iter()
-            .filter_map(|case_id| inner.records.get(case_id).cloned())
-            .collect();
-        history.sort_by(|left, right| right.at.cmp(&left.at));
+        let mut history: Vec<Record> = inner
+            .by_user
+            .get(&user_id)
+            .map(|cases| {
+                cases
+                    .iter()
+                    .filter_map(|case_id| inner.records.get(case_id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        drop(inner);
+        history.sort_by_key(|record| Reverse(record.at));
         history
-    }
-
-    pub async fn get(&self, case_id: u64) -> Option<Record> {
-        self.inner.lock().await.records.get(&case_id).cloned()
     }
 
     /// Takes a case back, so it stops costing standing. Returns the row as it
@@ -367,7 +368,7 @@ impl ModerationStore {
             &StoreEvent::Revoked {
                 case_id,
                 at: Utc::now(),
-                moderator_id: moderator_id.map(u64::to_string),
+                moderator_id: moderator_id.map(|id| id.to_string()),
             },
         )
         .await?;
@@ -542,7 +543,7 @@ pub async fn sweep_expired_bans(
                 );
                 continue;
             }
-            match result {
+            match &result {
                 Ok(()) => info!(
                     case_id = record.case_id,
                     user_id = record.user_id,
@@ -636,9 +637,10 @@ mod tests {
     use super::*;
 
     fn config() -> Config {
-        let config: Config =
-            toml::from_str("guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[role_guard]\nenabled = false")
-                .unwrap();
+        let config: Config = toml::from_str(
+            "guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[role_guard]\nenabled = false",
+        )
+        .unwrap();
         config.validate().unwrap();
         config
     }
@@ -674,16 +676,25 @@ mod tests {
     #[test]
     fn standing_falls_with_weight_and_recovers_with_age() {
         let config = config();
-        let fresh = standing_from(
-            &[record(1, Punishment::Kick, 25.0, 0)],
+        let fresh = standing_from(&[record(1, Punishment::Kick, 25.0, 0)], &config, Utc::now());
+        assert!((fresh.points - 75.0).abs() < 0.01);
+        assert_eq!(fresh.band, StandingBand::Neutral);
+        // Neutral is the baseline every limit is written against.
+        assert!((fresh.strictness.thresholds - 1.0).abs() < f64::EPSILON);
+        assert!((fresh.strictness.timeouts - 1.0).abs() < f64::EPSILON);
+
+        // Below it, worse standing means tighter limits and longer timeouts.
+        let poor = standing_from(
+            &[
+                record(1, Punishment::Kick, 25.0, 0),
+                record(2, Punishment::Kick, 25.0, 0),
+            ],
             &config,
             Utc::now(),
         );
-        assert!((fresh.points - 75.0).abs() < 0.01);
-        assert_eq!(fresh.band, StandingBand::Neutral);
-        // Worse standing means tighter limits and longer timeouts.
-        assert!(fresh.strictness.thresholds < 1.0);
-        assert!(fresh.strictness.timeouts > 1.0);
+        assert_eq!(poor.band, StandingBand::Poor);
+        assert!(poor.strictness.thresholds < 1.0);
+        assert!(poor.strictness.timeouts > 1.0);
 
         // Half the decay horizon has passed, so half the weight remains.
         let half_decayed = standing_from(
@@ -762,7 +773,11 @@ mod tests {
         let reopened = ModerationStore::open(&path).await.unwrap();
         let history = reopened.history(7).await;
         assert_eq!(history.len(), 2);
-        assert!(reopened.get(11).await.unwrap().revoked);
+        let revoked = history
+            .iter()
+            .find(|record| record.case_id == 11)
+            .expect("the revoked case is still on the record");
+        assert!(revoked.revoked);
 
         // The temporary ban is due a second later, and only once.
         let due = reopened

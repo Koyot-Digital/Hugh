@@ -2,12 +2,15 @@ mod bot;
 mod commands;
 mod config;
 mod detection;
+mod discipline;
 mod incident;
 mod lookup;
+mod moderation;
 mod quarantine;
 mod rotector;
 mod scrape;
 mod state;
+mod welcome;
 
 use std::{env, path::PathBuf, sync::Arc};
 
@@ -24,6 +27,7 @@ use crate::{
     bot::Handler,
     config::Config,
     incident::{IncidentReporter, IncidentSink},
+    moderation::ModerationStore,
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
     state::SecurityState,
@@ -69,6 +73,9 @@ async fn main() -> Result<()> {
         incident_channel,
         Arc::clone(&config),
     );
+    // The record is opened whether or not the commands are registered:
+    // standing and automod escalation are built on it either way.
+    let moderation = ModerationStore::open(&config.moderation.store_path).await?;
     let quarantine = if config.quarantine.enabled {
         Some(QuarantineStore::open(&config.quarantine.store_path).await?)
     } else {
@@ -92,10 +99,11 @@ async fn main() -> Result<()> {
     let handler = Handler::new(
         Arc::clone(&config),
         Arc::new(SecurityState::new(&config)),
-        incidents,
+        incidents.clone(),
         quarantine,
         QuarantineManager::new(),
         rotector,
+        moderation.clone(),
     );
 
     let intents = GatewayIntents::GUILDS
@@ -109,6 +117,16 @@ async fn main() -> Result<()> {
 
     // Drop our bootstrap copy; Serenity retains the authentication material it needs.
     drop(token);
+
+    // Temporary bans outlive the command that set them, so a background sweep
+    // lifts the ones that have run out.
+    tokio::spawn(moderation::sweep_expired_bans(
+        Arc::clone(&client.http),
+        moderation,
+        Arc::clone(&config),
+        incidents,
+    ));
+
     info!(
         guild_id = config.guild_id,
         incident_channel_id = incident_channel.get(),

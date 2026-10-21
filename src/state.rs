@@ -186,7 +186,10 @@ impl SecurityState {
                 if activity.protected_pings.len()
                     > limits.limit(config.mentions.protected_role_max_pings)
                 {
-                    decision.flag(Violation::ProtectedRolePing, config.mentions.timeout_seconds);
+                    decision.flag(
+                        Violation::ProtectedRolePing,
+                        config.mentions.timeout_seconds,
+                    );
                 }
             }
         }
@@ -231,31 +234,12 @@ impl SecurityState {
             }
         }
 
-        // Channel hopping belongs to the automod section rather than the spam
-        // one: the member is not flooding a channel, they are walking a single
-        // message around the server.
         if config.automod.enabled
             && config.automod.channel_hop_threshold > 0
             && input.count_towards_rate_limits
             && let Some(hash) = message_hash
         {
-            let activity = state.users.entry(input.user_id).or_default();
-            let window = Duration::from_secs(config.automod.channel_hop_window_seconds);
-            activity.hops.retain(|_, seen| {
-                prune_pairs(seen, now, window);
-                !seen.is_empty()
-            });
-            let seen = activity.hops.entry(hash).or_default();
-            prune_pairs(seen, now, window);
-            if !seen.iter().any(|(_, channel)| *channel == input.channel_id) {
-                seen.push_back((now, input.channel_id));
-            }
-            decision.hop_channels = seen.len();
-            // Never below two channels: one channel is simply a message.
-            let threshold = limits.limit(config.automod.channel_hop_threshold).max(2);
-            if seen.len() >= threshold {
-                decision.flag(Violation::ChannelHopSpam, config.automod.timeout_seconds);
-            }
+            inspect_channel_hops(&mut state, input, config, &mut decision, hash, now);
         }
 
         drop(state);
@@ -492,6 +476,40 @@ fn hash_message(message: &str) -> u64 {
     hasher.finish()
 }
 
+/// Channel hopping belongs to the automod section rather than the spam one:
+/// the member is not flooding one channel, they are walking a single message
+/// around the server. Records this channel against the message and flags once
+/// the message has reached enough of them.
+fn inspect_channel_hops(
+    state: &mut MessageState,
+    input: &MessageInput<'_>,
+    config: &Config,
+    decision: &mut MessageDecision,
+    hash: u64,
+    now: Instant,
+) {
+    let activity = state.users.entry(input.user_id).or_default();
+    let window = Duration::from_secs(config.automod.channel_hop_window_seconds);
+    activity.hops.retain(|_, seen| {
+        prune_pairs(seen, now, window);
+        !seen.is_empty()
+    });
+    let seen = activity.hops.entry(hash).or_default();
+    prune_pairs(seen, now, window);
+    if !seen.iter().any(|(_, channel)| *channel == input.channel_id) {
+        seen.push_back((now, input.channel_id));
+    }
+    decision.hop_channels = seen.len();
+    // Never below two channels: one channel is simply a message.
+    let threshold = input
+        .strictness
+        .limit(config.automod.channel_hop_threshold)
+        .max(2);
+    if seen.len() >= threshold {
+        decision.flag(Violation::ChannelHopSpam, config.automod.timeout_seconds);
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -516,7 +534,7 @@ mod tests {
 
     /// A message from a member in good standing, in one channel, from an
     /// account old enough that the new-account guards stay out of the way.
-    fn message<'a>(user_id: u64, content: &'a str) -> MessageInput<'a> {
+    fn message(user_id: u64, content: &str) -> MessageInput<'_> {
         MessageInput {
             user_id,
             channel_id: 100,
@@ -693,7 +711,10 @@ mod tests {
         let input = MessageInput {
             attachment_count: 2,
             count_towards_rate_limits: false,
-            ..message(3, "https://safe.example\nline\nhttps://sub.bad.example/path")
+            ..message(
+                3,
+                "https://safe.example\nline\nhttps://sub.bad.example/path",
+            )
         };
         let decision = state.inspect_message(&input, &config, Instant::now());
         assert!(decision.violations.contains(&Violation::LinkFlood));
@@ -810,7 +831,11 @@ mod tests {
 
         // Ordinary writing trips none of them.
         let ordinary = message(7, "Hello, is anyone around to help with a build?");
-        assert!(!state.inspect_message(&ordinary, &config, now).should_delete());
+        assert!(
+            !state
+                .inspect_message(&ordinary, &config, now)
+                .should_delete()
+        );
     }
 
     #[test]

@@ -279,7 +279,9 @@ pub fn visible_text(content: &str) -> String {
 /// letters to judge, which keeps `OK` and `A!` out of it.
 #[must_use]
 pub fn caps_ratio(content: &str, minimum_letters: usize) -> Option<f64> {
-    let letters = content.chars().filter(|character| character.is_alphabetic());
+    let letters = content
+        .chars()
+        .filter(|character| character.is_alphabetic());
     let (total, upper) = letters.fold((0_usize, 0_usize), |(total, upper), character| {
         (total + 1, upper + usize::from(character.is_uppercase()))
     });
@@ -318,7 +320,10 @@ pub fn longest_character_run(content: &str) -> usize {
 /// `<a:name:id>` forms.
 #[must_use]
 pub fn emoji_count(content: &str) -> usize {
-    let unicode = content.chars().filter(|character| is_emoji(*character)).count();
+    let unicode = content
+        .chars()
+        .filter(|character| is_emoji(*character))
+        .count();
     unicode + custom_emoji_count(content)
 }
 
@@ -491,8 +496,11 @@ mod tests {
     fn shouting_is_judged_only_on_long_enough_messages() {
         assert_eq!(caps_ratio("OK", 12), None);
         assert_eq!(caps_ratio("", 12), None);
+        // Short of the minimum the message goes unjudged, however it is cased.
+        assert_eq!(caps_ratio("FREE NITRO", 12), None);
         // Punctuation and digits are not letters, so they neither help nor hurt.
-        assert_eq!(caps_ratio("FREE NITRO!!! 1234", 12).unwrap(), 1.0);
+        let shouted = caps_ratio("FREE NITRO GIVEAWAY!!! 1234", 12).unwrap();
+        assert!((shouted - 1.0).abs() < f64::EPSILON, "{shouted}");
         let mixed = caps_ratio("Hello there, this is ordinary", 12).unwrap();
         assert!(mixed < 0.1, "{mixed}");
     }

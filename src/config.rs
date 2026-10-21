@@ -417,7 +417,11 @@ impl Strictness {
         if limit == 0 {
             return 0;
         }
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let scaled = (limit as f64 * self.thresholds).round().max(1.0) as usize;
         scaled
     }
@@ -440,7 +444,11 @@ impl Strictness {
         if seconds == 0 {
             return 0;
         }
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let scaled = (seconds as f64 * self.timeouts).round().max(1.0) as u64;
         scaled.min(28 * 24 * 60 * 60)
     }
@@ -492,17 +500,6 @@ pub enum StandingBand {
 }
 
 impl StandingBand {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Exemplary => "exemplary",
-            Self::Good => "good",
-            Self::Neutral => "neutral",
-            Self::Poor => "poor",
-            Self::Bad => "bad",
-        }
-    }
-
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -1217,16 +1214,6 @@ impl Config {
         } else {
             format!("{icon} ")
         }
-    }
-
-    /// The Lucide icon a slot is drawn from, for the asset download script and
-    /// the configuration reference.
-    #[must_use]
-    pub fn lucide_icon(slot: &str) -> Option<&'static str> {
-        ICONS
-            .iter()
-            .find(|(known, _)| *known == slot)
-            .map(|(_, icon)| *icon)
     }
 
     fn validate_rotector(&self) -> Result<()> {

@@ -102,6 +102,122 @@ have missed while offline.
 List every legitimate holder before enabling it. The server owner cannot have
 roles removed by bots, and Hugh can remove only roles below its highest role.
 
+## `[automod]`
+
+Content-shape guards that look at how a message is written rather than what it
+links to.
+
+- `max_caps_ratio`: share of letters that may be uppercase, from 0.0 to 1.0.
+  Use 1.0 or more to accept any amount of shouting.
+- `caps_min_letters`: shorter messages are never judged for shouting. A
+  three-letter message is uppercase by accident as often as by intent.
+- `max_repeated_characters`: longest run of one repeated character, as in
+  `aaaaaaaaaaaa`. Whitespace runs are ignored, because ordinary formatting is
+  made of them.
+- `max_emoji`: emoji per message, counting both Unicode and custom `<:name:id>`
+  forms.
+- `max_combining_marks`: longest run of combining marks, which is what stacks
+  "zalgo" text.
+- `blocked_phrases`: case-insensitive substrings Hugh refuses. Matching happens
+  with zero-width characters stripped, so padding cannot hide a phrase.
+- `channel_hop_threshold` and `channel_hop_window_seconds`: distinct channels
+  one member may repeat a message across inside the window. This catches a
+  single message walked around the server, which no per-channel flood limit
+  sees. The threshold never falls below two channels, however strict a member's
+  standing makes it: one channel is simply a message.
+- `new_account_link_age_seconds`: accounts younger than this may not post
+  links. Zero disables the check.
+- `timeout_seconds`: timeout used by these violations.
+
+## `[escalation]`
+
+Hugh adds the weight of every automod hit to a rolling per-member total and
+steps up the response as that total climbs, so a member who trips one guard
+after another stops being handled one message at a time.
+
+- `window_seconds`: how long a hit keeps counting towards the total. Once the
+  window empties the member starts over, so a quiet month is not followed by an
+  instant ban for one slip.
+- `timeout_at`, `kick_at`, `ban_at`: accumulated weight at which each step takes
+  over. Zero disables a step, and the member's standing scales every threshold.
+- `timeout_seconds`: timeout the escalated step applies, before standing
+  scaling.
+- `ban_duration_seconds`: length of an escalated ban. Zero bans permanently.
+
+Hugh climbs one step at a time and never repeats a step it has already taken
+inside the window. An escalation to kick or ban supersedes the timeout: there is
+no point timing out somebody who is about to be removed. The weight each
+violation contributes is set in `[standing.violations]`.
+
+## `[standing]`
+
+One score per member, carried by their moderation record. Every punishment takes
+its weight off, and that weight fades back over `decay_days`, so an old warning
+stops counting while a fresh one bites. Standing never goes below zero, and a
+revoked case stops costing anything at all.
+
+- `starting_points`: standing a member with no history holds. Default `100.0`.
+- `decay_days`: days over which one punishment's weight decays to nothing.
+- `exemplary_at`, `good_at`, `neutral_at`, `poor_at`: lower bound of each band,
+  descending. A member sits in the best band whose bound they still meet, and
+  below `poor_at` they are in the worst band.
+- `[standing.punishments]`: weight each kind of punishment takes off: `warn`,
+  `timeout`, `kick`, `ban`, `temporary_ban`, `quarantine`, and `automod` for a
+  hit whose violations carry no weight of their own.
+- `[standing.violations]`: weight each automod violation contributes, both to
+  the escalation total and to the standing cost of the resulting case.
+- `[standing.strictness.<band>]`: how hard the limits bite in that band.
+  `thresholds` scales every counted limit, so below 1.0 a member trips guards
+  sooner; `timeouts` scales the resulting timeout. The bands are `exemplary`,
+  `good`, `neutral`, `poor` and `bad`, and `neutral` is the 1.0 baseline every
+  limit is written against.
+
+A scaled limit never reaches zero, because a limit of zero would delete every
+message the member sends; a limit configured as zero means "never allowed" and
+stays there. Scaled timeouts are clamped to Discord's 28-day ceiling.
+
+## `[moderation]`
+
+The record behind `/warn`, `/kick`, `/ban`, `/unban`, `/unwarn`, `/modlogs` and
+`/standing`.
+
+- `enabled`: registers those commands. The record itself is always kept, because
+  standing and escalation are built on it.
+- `store_path`: append-only case journal. Default: `data/moderation.jsonl`.
+- `ban_delete_message_days`: days of the banned member's messages Discord
+  removes, from 0 to 7. `/ban` can override it per call.
+- `dm_on_action`: tell the member why before Hugh acts. A closed DM is not an
+  error.
+- `max_ban_duration_seconds`: longest duration `/ban` accepts. Zero allows any
+  length.
+- `expiry_sweep_seconds`: how often Hugh looks for temporary bans that have run
+  out. Each expiry is filed as its own case.
+- `modlog_page_size`: cases shown by one `/modlogs` call.
+
+A temporary ban is marked served before the unban is retried, so a ban Discord
+has already dropped is not retried on every sweep from then on.
+
+## `[welcome]`
+
+- `enabled` and `channel_id`: the greeting and where it goes.
+- `message`: the template. `{user}` becomes a mention; `{username}`,
+  `{display}`, `{server}`, `{count}`, `{ordinal}` and `{id}` are filled in as
+  text. An unknown placeholder is left in place, so a typo shows up in the
+  channel rather than being silently swallowed.
+- `skip_bots`: stay quiet for applications joining.
+- `skip_during_raid`: stay quiet while raid mode is on, so a join flood cannot
+  turn the welcome channel into the raid.
+
+Nobody Hugh has just removed on arrival is welcomed.
+
+## `[lock]`
+
+- `restricted_role_ids`: the roles `/lock` silences. With none listed it falls
+  back to `@everyone`, which is what a lock means in a server that has not split
+  its roles up.
+- `bypass_role_ids`: roles `/lock` leaves able to speak, by way of an explicit
+  allow that outranks the deny above it. A role in both lists is silenced.
+
 ## `[quarantine]`
 
 - `enabled`: enables `/banish`, `/unbanish`, and channel isolation.
@@ -277,8 +393,9 @@ archive has to outlive those links.
 
 ## `[icons]`
 
-Case and lookup cards are built around icon slots. Every slot has a plain-emoji
-fallback, so this section is entirely optional; set a slot to a Discord custom
+Case and lookup cards are built around icon slots. An unset slot renders as
+nothing at all, because Hugh never substitutes an emoji of its own and leaves no
+stranded space behind, so this section is entirely optional. Set a slot to an
 emoji to brand the cards:
 
 ```toml
@@ -298,6 +415,11 @@ printed verbatim. An unknown slot name stops startup too; the slots are:
 | --- | --- | --- |
 | `case` | case titles with no specific outcome | `folder-open` |
 | `pin` | the Pin to mod log button | `pin` |
+| `warn` | member warned | `megaphone` |
+| `ban` | member banned, permanently or temporarily | `hammer` |
+| `unban` | ban lifted or expired | `user-round-check` |
+| `standing` | the `/standing` card | `gauge` |
+| `welcome` | the welcome greeting | `hand-heart` |
 | `reason` | the "why" line of every case | `file-text` |
 | `details` | evidence block, lookup findings | `search` |
 | `member` | member reference, Discord ID field | `user-round` |
@@ -310,7 +432,7 @@ printed verbatim. An unknown slot name stops startup too; the slots are:
 | `join` | join screening | `user-round-plus` |
 | `role` | protected roles removed | `user-round-cog` |
 | `quarantine` | member quarantined | `lock` |
-| `release` | member released | `lock-open` |
+| `release` | member released, case taken back, channel unlocked | `lock-open` |
 | `lock` | channel locked | `lock-keyhole` |
 | `denied` | command blocked | `ban` |
 | `failed` | any failed or partial enforcement | `triangle-alert` |
@@ -344,8 +466,11 @@ anyone in `trusted_user_ids` counts as `owner`.
 | Command | Default tier |
 | --- | --- |
 | `/help`, `/hugh` | `everyone` |
+| `/modlogs`, `/standing` | `helper` |
 | `/check` | `moderator` |
-| `/lock`, `/banish`, `/unbanish` | `moderator` |
+| `/lock`, `/unlock`, `/banish`, `/unbanish` | `moderator` |
+| `/warn`, `/kick` | `moderator` |
+| `/ban`, `/unban`, `/unwarn` | `admin` |
 | `/scrape` | `owner` |
 
 While every tier list is empty, Hugh keeps Discord's own command gating on its
@@ -367,15 +492,30 @@ before anyone can run it.
 ## Slash commands
 
 Hugh registers commands in the configured guild at startup, gated as described
-under `[permissions]`. `/lock`, `/banish`, and `/unbanish` each accept an
-optional `reason` (up to 512 characters) that is preserved in its case log.
-Members in `trusted_user_ids` may always use them.
+under `[permissions]`. Each staff command accepts a `reason` (up to 512
+characters) that is preserved in its case log; it is required on `/warn` and
+optional elsewhere. Members in `trusted_user_ids` may always use them.
+
+Nobody can act on a member at or above their own tier, so a moderator cannot
+warn, kick or ban another moderator.
+
+`/ban` takes an optional `length` such as `30m`, `1h30m`, `2d` or `1w`; omitting
+it bans permanently, and a temporary ban is lifted by the sweep described under
+`[moderation]`. `/unban` takes a user ID rather than a member, since the account
+has already left. `/unwarn` takes a case number from `/modlogs` and revokes it,
+so it stops costing standing.
 
 Hugh re-checks the required tier inside its own handler on every invocation, so
 a change to Discord permissions never bypasses `[permissions]`.
 
-`/lock` preserves the channel's existing `@everyone` overwrite and adds denies
-for sending, creating threads, and reacting. This release intentionally does
-not provide `/unlock`: safely restoring an exact pre-lock state requires a
-separate durable channel snapshot. An administrator can reverse those specific
-deny settings in Discord's channel permission editor.
+`/lock` adds denies for sending, creating threads, and reacting to each role in
+`lock.restricted_role_ids`, or to `@everyone` when that list is empty, and
+leaves every other permission setting on the channel as it was. Roles in
+`lock.bypass_role_ids` receive an explicit allow for the same permissions, so
+staff keep talking in a locked channel without Hugh having to guess at their
+roles.
+
+`/unlock` takes those same permission bits back out, and removes an overwrite
+entirely once nothing is left in it, so the channel inherits from its category
+the way it did before the lock. Because it clears only the bits `/lock` sets, it
+cannot disturb an unrelated setting, and no durable channel snapshot is needed.

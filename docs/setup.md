@@ -24,14 +24,17 @@ scopes and these bot permissions:
 - Manage Messages
 - Moderate Members
 - Use External Emojis if the `[icons]` emoji live in another server
-- Kick Members if either account-age action is `"kick"`
+- Kick Members for `/kick`, escalation, and either account-age action set to
+  `"kick"`
+- Ban Members for `/ban`, `/unban`, escalated bans, and lifting a temporary ban
+  when it runs out
 - Manage Roles if the role guard or quarantine is enabled
-- Manage Channels for `/lock` and quarantine isolation
+- Manage Channels for `/lock`, `/unlock`, and quarantine isolation
 
 Hugh does not require Administrator. Granting it is strongly discouraged.
 
-Place Hugh's Discord role above every member it may time out or kick and above
-every role it must remove. Discord's role hierarchy applies even if the matching
+Place Hugh's Discord role above every member it may time out, kick or ban, and
+above every role it must remove. Discord's role hierarchy applies even if the matching
 permission is present.
 
 Restrict the incident channel so only appropriate staff can view it, and keep

@@ -1,0 +1,929 @@
+//! The moderator's own tools: `/warn`, `/kick`, `/ban`, `/unban`, `/unwarn`,
+//! `/modlogs` and `/standing`.
+//!
+//! Every one of them writes a case card to the mod log and a row to the
+//! moderation record, so one case number covers what happened, why, who did
+//! it, and what it cost the member's standing.
+
+use anyhow::{Context as _, Result, bail};
+use serenity::{
+    all::{
+        CommandDataOption, CommandInteraction, CommandOptionType, Context, GuildId, Member,
+        Permissions, UserId,
+    },
+    builder::{
+        CreateCommand, CreateCommandOption, CreateEmbed, CreateEmbedFooter, CreateMessage,
+        EditInteractionResponse,
+    },
+};
+use tracing::warn;
+
+use crate::{
+    commands::{invoker_level, member_level, option_integer, option_string, option_user},
+    config::{AccessLevel, Config, StandingBand},
+    incident::{Incident, IncidentReporter, UserSnapshot},
+    moderation::{ModerationStore, NewPunishment, Punishment, Record, Standing, parse_duration},
+};
+
+/// Discord's audit-log reason field, with room left for Hugh's own prefix.
+const AUDIT_LIMIT: usize = 440;
+/// Width of the standing bar on a `/standing` card.
+const BAR_SEGMENTS: usize = 20;
+
+pub fn commands() -> Vec<(&'static str, CreateCommand)> {
+    let reason = |description: &str, required: bool| {
+        CreateCommandOption::new(CommandOptionType::String, "reason", description)
+            .min_length(1)
+            .max_length(512)
+            .required(required)
+    };
+    let target = |description: &str| {
+        CreateCommandOption::new(CommandOptionType::User, "user", description).required(true)
+    };
+    vec![
+        (
+            "warn",
+            CreateCommand::new("warn")
+                .description("Warn a member and record it against their standing")
+                .add_option(target("Member to warn"))
+                .add_option(reason("Why they are being warned", true)),
+        ),
+        (
+            "kick",
+            CreateCommand::new("kick")
+                .description("Remove a member from the server")
+                .add_option(target("Member to kick"))
+                .add_option(reason("Why they are being kicked", false)),
+        ),
+        (
+            "ban",
+            CreateCommand::new("ban")
+                .description("Ban a member, permanently or for a set length of time")
+                .add_option(target("Member to ban"))
+                .add_option(reason("Why they are being banned", false))
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "length",
+                        "How long, such as 30m, 1h30m, 2d or 1w. Omit to ban permanently",
+                    )
+                    .min_length(1)
+                    .max_length(32),
+                )
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "delete_days",
+                        "Days of their recent messages to delete, 0 to 7",
+                    )
+                    .min_int_value(0)
+                    .max_int_value(7),
+                ),
+        ),
+        (
+            "unban",
+            CreateCommand::new("unban")
+                .description("Lift a ban, by user ID")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "user",
+                        "ID of the banned account",
+                    )
+                    .required(true)
+                    .min_length(15)
+                    .max_length(20),
+                )
+                .add_option(reason("Why the ban is being lifted", false)),
+        ),
+        (
+            "unwarn",
+            CreateCommand::new("unwarn")
+                .description("Take a case back, so it stops counting against standing")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "case",
+                        "Case number from /modlogs",
+                    )
+                    .required(true)
+                    .min_int_value(1),
+                )
+                .add_option(reason("Why the case is being taken back", false)),
+        ),
+        (
+            "modlogs",
+            CreateCommand::new("modlogs")
+                .description("Show a member's moderation history")
+                .add_option(target("Member to look up")),
+        ),
+        (
+            "standing",
+            CreateCommand::new("standing")
+                .description("Show a member's standing and the automod strictness it earns")
+                .add_option(CreateCommandOption::new(
+                    CommandOptionType::User,
+                    "user",
+                    "Member to look up; defaults to you",
+                )),
+        ),
+    ]
+}
+
+pub async fn handle(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    if !config.moderation.enabled {
+        bail!("the moderation record is disabled in Hugh's configuration");
+    }
+    match command.data.name.as_str() {
+        "warn" => warn_member(ctx, command, config, store, incidents).await,
+        "kick" => kick(ctx, command, config, store, incidents).await,
+        "ban" => ban(ctx, command, config, store, incidents).await,
+        "unban" => unban(ctx, command, config, store, incidents).await,
+        "unwarn" => unwarn(ctx, command, config, store, incidents).await,
+        "modlogs" => modlogs(ctx, command, config, store).await,
+        "standing" => standing(ctx, command, config, store).await,
+        other => bail!("unknown moderation command {other:?}"),
+    }
+}
+
+async fn warn_member(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let target = target_user(&command.data.options)?;
+    let member = actionable(ctx, command, config, target).await?;
+    let member = member.context("that member is not in this server")?;
+    let reason = option_string(&command.data.options, "reason").context("missing reason option")?;
+
+    notify(ctx, config, target, "warned in", reason, None).await;
+    let outcome = record_case(
+        ctx,
+        command,
+        config,
+        store,
+        incidents,
+        Case {
+            kind: Punishment::Warn,
+            subject: (&member.user).into(),
+            action: "member_warned",
+            reason,
+            duration_seconds: None,
+        },
+    )
+    .await?;
+    reply(
+        ctx,
+        command,
+        config,
+        &outcome,
+        format!("Warned <@{target}>."),
+    )
+    .await
+}
+
+async fn kick(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let target = target_user(&command.data.options)?;
+    let member = actionable(ctx, command, config, target).await?;
+    let member = member.context("that member is not in this server")?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("No reason given");
+
+    // The DM goes first: once they are out of the server Hugh may no longer
+    // share a mutual guild with them, and the message would never arrive.
+    notify(ctx, config, target, "kicked from", reason, None).await;
+    guild_id
+        .kick_with_reason(&ctx.http, target, &audit_reason(command, reason))
+        .await
+        .context("Discord refused the kick; check Hugh's Kick Members permission and role order")?;
+
+    let outcome = record_case(
+        ctx,
+        command,
+        config,
+        store,
+        incidents,
+        Case {
+            kind: Punishment::Kick,
+            subject: (&member.user).into(),
+            action: "member_kicked",
+            reason,
+            duration_seconds: None,
+        },
+    )
+    .await?;
+    reply(
+        ctx,
+        command,
+        config,
+        &outcome,
+        format!("Kicked <@{target}>."),
+    )
+    .await
+}
+
+async fn ban(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let target = target_user(&command.data.options)?;
+    // A ban is the one action that can land on somebody who already left, so a
+    // missing member is not a refusal here.
+    let member = actionable(ctx, command, config, target).await?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("No reason given");
+    let length = option_string(&command.data.options, "length").unwrap_or_default();
+    let duration = parse_duration(length)?;
+    if let Some(seconds) = duration
+        && config.moderation.max_ban_duration_seconds > 0
+        && seconds > config.moderation.max_ban_duration_seconds
+    {
+        bail!(
+            "that length is above the configured ceiling of {}",
+            crate::incident::human_duration(config.moderation.max_ban_duration_seconds)
+        );
+    }
+    let delete_days = option_integer(&command.data.options, "delete_days")
+        .and_then(|days| u8::try_from(days).ok())
+        .unwrap_or(config.moderation.ban_delete_message_days)
+        .min(7);
+
+    notify(ctx, config, target, "banned from", reason, duration).await;
+    guild_id
+        .ban_with_reason(
+            &ctx.http,
+            target,
+            delete_days,
+            &audit_reason(command, reason),
+        )
+        .await
+        .context("Discord refused the ban; check Hugh's Ban Members permission and role order")?;
+
+    let kind = if duration.is_some() {
+        Punishment::TemporaryBan
+    } else {
+        Punishment::Ban
+    };
+    let subject = member.as_ref().map_or_else(
+        || UserSnapshot::placeholder(target.get()),
+        |member| (&member.user).into(),
+    );
+    let outcome = record_case(
+        ctx,
+        command,
+        config,
+        store,
+        incidents,
+        Case {
+            kind,
+            subject,
+            action: if duration.is_some() {
+                "member_temporarily_banned"
+            } else {
+                "member_banned"
+            },
+            reason,
+            duration_seconds: duration,
+        },
+    )
+    .await?;
+    let summary = duration.map_or_else(
+        || format!("Banned <@{target}> permanently."),
+        |seconds| {
+            format!(
+                "Banned <@{target}> for {}. Hugh lifts it when the time is up.",
+                crate::incident::human_duration(seconds)
+            )
+        },
+    );
+    reply(ctx, command, config, &outcome, summary).await
+}
+
+async fn unban(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let raw = option_string(&command.data.options, "user").context("missing user option")?;
+    let target: UserId = raw
+        .trim()
+        .parse::<u64>()
+        .map(UserId::new)
+        .map_err(|_| anyhow::anyhow!("{raw:?} is not a Discord user ID"))?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("No reason given");
+
+    guild_id.unban(&ctx.http, target).await.context(
+        "Discord refused the unban; the account may not be banned, or Hugh may lack Ban Members",
+    )?;
+    // Close the open ban case, so the expiry sweep does not try to lift a ban
+    // a moderator has already lifted by hand.
+    let closed = store
+        .history(target.get())
+        .await
+        .into_iter()
+        .find(|record| {
+            matches!(record.kind, Punishment::Ban | Punishment::TemporaryBan) && !record.lifted
+        })
+        .map(|record| record.case_id);
+    if let Some(case_id) = closed {
+        store.lift(case_id).await?;
+    }
+
+    let mut incident = Incident::new(
+        "member_unban",
+        config.guild_id,
+        "member_unbanned",
+        reason.to_owned(),
+    );
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
+    incident
+        .details
+        .insert("target_user_id".into(), target.get().into());
+    if let Some(case_id) = closed {
+        incident
+            .details
+            .insert("original_case".into(), case_id.into());
+    }
+    let case_id = incidents.report(&ctx.http, incident).await;
+
+    let note = closed.map_or_else(
+        || " No open ban case was on record for them.".to_owned(),
+        |case| format!(" Case #{case} is now closed."),
+    );
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().embed(
+                CreateEmbed::new()
+                    .title(format!(
+                        "{}Case #{case_id} · Ban lifted",
+                        config.mark("unban")
+                    ))
+                    .description(format!("Unbanned <@{target}>.{note}"))
+                    .colour(0x0023_A55A),
+            ),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn unwarn(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let case = option_integer(&command.data.options, "case")
+        .and_then(|case| u64::try_from(case).ok())
+        .context("missing case option")?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("Revoked by a moderator");
+
+    let record = store
+        .revoke(case, Some(command.user.id.get()))
+        .await?
+        .with_context(|| format!("no case numbered #{case} is on the moderation record"))?;
+    if record.revoked {
+        bail!("Case #{case} was already taken back");
+    }
+
+    let standing = store.standing(record.user_id, config).await;
+    let mut incident = Incident::new(
+        "case_revoked",
+        config.guild_id,
+        "warning_revoked",
+        reason.to_owned(),
+    );
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
+    incident.actor_id = Some(record.user_id);
+    incident
+        .details
+        .insert("target_user_id".into(), record.user_id.into());
+    incident.details.insert("revoked_case".into(), case.into());
+    incident
+        .details
+        .insert("punishment".into(), record.kind.label().into());
+    incident
+        .details
+        .insert("standing".into(), standing_text(&standing).into());
+    let case_id = incidents.report(&ctx.http, incident).await;
+
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().embed(
+                CreateEmbed::new()
+                    .title(format!(
+                        "{}Case #{case_id} · Case #{case} taken back",
+                        config.mark("release")
+                    ))
+                    .description(format!(
+                        "The {} on <@{}> no longer counts. Their standing is now {}.",
+                        record.kind.label().to_lowercase(),
+                        record.user_id,
+                        standing_text(&standing)
+                    ))
+                    .colour(0x0023_A55A),
+            ),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn modlogs(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let target = target_user(&command.data.options)?;
+    let history = store.history(target.get()).await;
+    let standing = store.standing(target.get(), config).await;
+
+    let mut embed = CreateEmbed::new()
+        .title(format!("{}Moderation history", config.mark("case")))
+        .colour(if history.is_empty() {
+            0x0023_A55A
+        } else {
+            0x00F0_B232
+        });
+    if history.is_empty() {
+        embed = embed.description(format!(
+            "<@{target}> has nothing on record. Standing is {}.",
+            standing_text(&standing)
+        ));
+    } else {
+        let shown = config.moderation.modlog_page_size.min(history.len());
+        let lines: Vec<String> = history
+            .iter()
+            .take(shown)
+            .map(|record| case_line(config, record))
+            .collect();
+        let more = history.len().saturating_sub(shown);
+        let footer = if more > 0 {
+            format!(" {more} older case(s) are on record.")
+        } else {
+            String::new()
+        };
+        embed = embed
+            .description(format!(
+                "<@{target}> · {} case(s) · standing {}{footer}",
+                history.len(),
+                standing_text(&standing)
+            ))
+            .field(
+                format!("{}Cases", config.mark("details")),
+                truncate(&lines.join("\n"), 1_024),
+                false,
+            )
+            .footer(CreateEmbedFooter::new(
+                "Take a case back with /unwarn case:<number>",
+            ));
+    }
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await?;
+    Ok(())
+}
+
+async fn standing(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let target = option_user(&command.data.options, "user").unwrap_or(command.user.id);
+    let standing = store.standing(target.get(), config).await;
+    let strictness = standing.strictness;
+
+    let mut embed = CreateEmbed::new()
+        .title(format!(
+            "{}Standing · {}",
+            config.mark(standing.band.icon()),
+            standing.band.label()
+        ))
+        .colour(band_colour(standing.band))
+        .description(format!(
+            "<@{target}>\n`[{}]` **{}**",
+            standing_bar(standing.fraction()),
+            standing_text(&standing)
+        ))
+        .field(
+            format!("{}What it changes", config.mark("details")),
+            format!(
+                "Automod limits at **{:.0}%** of the configured values\nTimeouts at **{:.0}%** of \
+                 the configured length",
+                strictness.thresholds * 100.0,
+                strictness.timeouts * 100.0
+            ),
+            false,
+        );
+
+    if standing.total_cases == 0 {
+        embed = embed.field(
+            format!("{}History", config.mark("case")),
+            "Nothing on record.",
+            false,
+        );
+    } else {
+        let counts = standing
+            .counts
+            .iter()
+            .map(|(kind, count)| format!("{} × {count}", kind.label()))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let revoked = if standing.revoked_cases > 0 {
+            format!("\n{} case(s) taken back", standing.revoked_cases)
+        } else {
+            String::new()
+        };
+        let latest = standing.latest.as_ref().map_or_else(String::new, |record| {
+            format!("\nLatest: {}", case_line(config, record))
+        });
+        embed = embed.field(
+            format!("{}History", config.mark("case")),
+            truncate(
+                &format!(
+                    "{} case(s) · {:.1} weight still counting{revoked}\n{counts}{latest}",
+                    standing.total_cases, standing.active_weight
+                ),
+                1_024,
+            ),
+            false,
+        );
+    }
+
+    embed = embed.footer(CreateEmbedFooter::new(format!(
+        "Weight fades to nothing over {:.0} days, so standing recovers on its own",
+        config.standing.decay_days
+    )));
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await?;
+    Ok(())
+}
+
+/// A punishment on its way to both the mod log and the moderation record.
+struct Case<'a> {
+    kind: Punishment,
+    subject: UserSnapshot,
+    action: &'a str,
+    reason: &'a str,
+    duration_seconds: Option<u64>,
+}
+
+/// What a recorded case leaves behind for the moderator's reply.
+struct Outcome {
+    case_id: u64,
+    kind: Punishment,
+    standing: Standing,
+}
+
+/// Posts the case card, writes the record row, and reads the member's standing
+/// back so the moderator sees what the case cost them.
+async fn record_case(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+    case: Case<'_>,
+) -> Result<Outcome> {
+    let weight = case.kind.weight(&config.standing.punishments);
+    let user_id = case.subject.id;
+    let mut incident = Incident::new(
+        format!("member_{}", case.kind.as_str()),
+        config.guild_id,
+        case.action,
+        case.reason.to_owned(),
+    );
+    incident.subject = Some(case.subject);
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
+    incident
+        .details
+        .insert("target_user_id".into(), user_id.into());
+    incident
+        .details
+        .insert("punishment".into(), case.kind.label().into());
+    if let Some(seconds) = case.duration_seconds {
+        incident
+            .details
+            .insert("duration_seconds".into(), seconds.into());
+    }
+    if weight > 0.0 {
+        incident.details.insert("weight".into(), weight.into());
+    }
+    let case_id = incidents.report(&ctx.http, incident).await;
+
+    store
+        .record(NewPunishment {
+            case_id,
+            user_id,
+            kind: case.kind,
+            reason: case.reason.to_owned(),
+            moderator_id: Some(command.user.id.get()),
+            duration_seconds: case.duration_seconds,
+            weight,
+        })
+        .await?;
+    let standing = store.standing(user_id, config).await;
+    Ok(Outcome {
+        case_id,
+        kind: case.kind,
+        standing,
+    })
+}
+
+async fn reply(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    outcome: &Outcome,
+    summary: String,
+) -> Result<()> {
+    let embed = CreateEmbed::new()
+        .title(format!(
+            "{}Case #{} · {}",
+            config.mark(outcome.kind.icon()),
+            outcome.case_id,
+            outcome.kind.label()
+        ))
+        .description(format!(
+            "{summary}\nStanding is now {}.",
+            standing_text(&outcome.standing)
+        ))
+        .colour(band_colour(outcome.standing.band))
+        .footer(CreateEmbedFooter::new(format!(
+            "Case #{} is in the mod log and on their /modlogs",
+            outcome.case_id
+        )));
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await?;
+    Ok(())
+}
+
+fn target_user(options: &[CommandDataOption]) -> Result<UserId> {
+    option_user(options, "user").context("missing user option")
+}
+
+/// Refuses the targets Hugh must not act on, and the mistake moderators make
+/// most: acting on somebody at or above their own staff level. Returns the
+/// member when they are in the server, and `None` when they are not.
+async fn actionable(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    target: UserId,
+) -> Result<Option<Member>> {
+    if target == command.user.id {
+        bail!("that command is for other members, not yourself");
+    }
+    if target == ctx.cache.current_user().id {
+        bail!("Hugh will not act on itself");
+    }
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let guild = guild_id.to_partial_guild(&ctx.http).await?;
+    if target == guild.owner_id {
+        bail!("Discord does not allow a bot to act on the server owner");
+    }
+
+    let Ok(member) = guild_id.member(&ctx.http, target).await else {
+        return Ok(None);
+    };
+    let their_level = target_level(ctx, config, guild_id, &member).await?;
+    let own_level = invoker_level(command, config);
+    if their_level >= own_level && their_level > AccessLevel::Everyone {
+        bail!(
+            "<@{target}> holds the **{}** staff level and you hold **{}**, so this is not yours to do",
+            their_level.as_str(),
+            own_level.as_str()
+        );
+    }
+    Ok(Some(member))
+}
+
+/// The target's staff level, including any level their Discord permissions
+/// grant them, so an administrator cannot be kicked by a helper.
+async fn target_level(
+    ctx: &Context,
+    config: &Config,
+    guild_id: GuildId,
+    member: &Member,
+) -> Result<AccessLevel> {
+    let role_ids: Vec<u64> = member.roles.iter().map(|role| role.get()).collect();
+    let mut permissions = Permissions::empty();
+    if config.permissions.allow_discord_permissions {
+        let roles = guild_id.roles(&ctx.http).await?;
+        for role in &member.roles {
+            if let Some(role) = roles.get(role) {
+                permissions |= role.permissions;
+            }
+        }
+    }
+    Ok(member_level(
+        config,
+        member.user.id.get(),
+        &role_ids,
+        permissions,
+    ))
+}
+
+/// Tells the member what happened and why. A closed DM is their choice, not an
+/// error, so a failure here never stops the punishment.
+async fn notify(
+    ctx: &Context,
+    config: &Config,
+    target: UserId,
+    phrase: &str,
+    reason: &str,
+    duration: Option<u64>,
+) {
+    if !config.moderation.dm_on_action {
+        return;
+    }
+    let length = duration.map_or_else(String::new, |seconds| {
+        format!(" for {}", crate::incident::human_duration(seconds))
+    });
+    let content = format!(
+        "You have been {phrase} the server{length}.\n\nReason: {}",
+        truncate(reason, 1_500)
+    );
+    if let Err(error) = target
+        .direct_message(ctx, CreateMessage::new().content(content))
+        .await
+    {
+        warn!(
+            ?error,
+            user_id = target.get(),
+            "could not tell the member why; their DMs are closed"
+        );
+    }
+}
+
+/// The audit-log reason Discord shows beside the action.
+fn audit_reason(command: &CommandInteraction, reason: &str) -> String {
+    format!(
+        "Hugh · {} · {}",
+        command.user.name,
+        truncate(reason, AUDIT_LIMIT)
+    )
+}
+
+fn case_line(config: &Config, record: &Record) -> String {
+    let when = record.at.timestamp();
+    let length = record.duration_seconds.map_or_else(String::new, |seconds| {
+        format!(" · {}", crate::incident::human_duration(seconds))
+    });
+    let moderator = record
+        .moderator_id
+        .map_or_else(|| "Hugh · automatic".to_owned(), |id| format!("<@{id}>"));
+    let state = if record.revoked {
+        " · **taken back**"
+    } else if record.lifted {
+        " · served"
+    } else {
+        ""
+    };
+    format!(
+        "`#{}` {}{} — {}{length} · <t:{when}:R> · {moderator}{state}",
+        record.case_id,
+        config.mark(record.kind.icon()),
+        record.kind.label(),
+        truncate(&record.reason, 90),
+    )
+}
+
+fn standing_text(standing: &Standing) -> String {
+    format!(
+        "**{:.1}** / {:.0} ({})",
+        standing.points,
+        standing.starting_points,
+        standing.band.label()
+    )
+}
+
+/// A plain-text bar, so standing reads at a glance without an emoji in sight.
+fn standing_bar(fraction: f64) -> String {
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let filled = (fraction * BAR_SEGMENTS as f64)
+        .round()
+        .clamp(0.0, BAR_SEGMENTS as f64) as usize;
+    format!(
+        "{}{}",
+        "#".repeat(filled),
+        ".".repeat(BAR_SEGMENTS - filled)
+    )
+}
+
+const fn band_colour(band: StandingBand) -> u32 {
+    match band {
+        StandingBand::Exemplary | StandingBand::Good => 0x0023_A55A,
+        StandingBand::Neutral => 0x0058_65F2,
+        StandingBand::Poor => 0x00F0_B232,
+        StandingBand::Bad => 0x00ED_4245,
+    }
+}
+
+fn truncate(value: &str, maximum: usize) -> String {
+    if value.chars().count() <= maximum {
+        return value.to_owned();
+    }
+    value
+        .chars()
+        .take(maximum.saturating_sub(1))
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> Config {
+        let config: Config = toml::from_str(
+            "guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[role_guard]\nenabled = false",
+        )
+        .unwrap();
+        config.validate().unwrap();
+        config
+    }
+
+    #[test]
+    fn the_bar_tracks_the_fraction() {
+        assert_eq!(standing_bar(1.0), "#".repeat(BAR_SEGMENTS));
+        assert_eq!(standing_bar(0.0), ".".repeat(BAR_SEGMENTS));
+        assert_eq!(standing_bar(0.5).matches('#').count(), BAR_SEGMENTS / 2);
+        // Nonsense input cannot produce a bar of the wrong width.
+        assert_eq!(standing_bar(-1.0).len(), BAR_SEGMENTS);
+        assert_eq!(standing_bar(9.0).len(), BAR_SEGMENTS);
+    }
+
+    #[test]
+    fn standing_reads_as_points_out_of_the_starting_total() {
+        let config = config();
+        let standing = Standing::clean(&config);
+        assert_eq!(standing_text(&standing), "**100.0** / 100 (Exemplary)");
+        assert_eq!(standing.band, StandingBand::Exemplary);
+    }
+
+    /// With no icon uploaded a case line still reads as a sentence, with no
+    /// stranded space where a glyph would have been.
+    #[test]
+    fn case_lines_survive_an_empty_icon_slot() {
+        let config = config();
+        let record = Record {
+            case_id: 7,
+            user_id: 42,
+            kind: Punishment::TemporaryBan,
+            reason: "Raid advertising".to_owned(),
+            moderator_id: Some(9),
+            at: chrono::Utc::now(),
+            duration_seconds: Some(3_600),
+            weight: 40.0,
+            revoked: false,
+            lifted: false,
+        };
+        let line = case_line(&config, &record);
+        assert!(
+            line.starts_with("`#7` Temporary ban — Raid advertising"),
+            "{line}"
+        );
+        assert!(line.contains("1 hour"), "{line}");
+        assert!(line.contains("<@9>"), "{line}");
+    }
+}

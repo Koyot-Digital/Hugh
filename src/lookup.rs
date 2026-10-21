@@ -1037,8 +1037,18 @@ safe = \"<:safe:123456789012345679>\"",
         assert_eq!(config.icon("flagged"), "");
         assert_eq!(config.mark("flagged"), "");
         assert_eq!(config.icon("not-a-slot"), "");
-        assert_eq!(Config::lucide_icon("flagged"), Some("shield-alert"));
-        assert_eq!(Config::lucide_icon("not-a-slot"), None);
+        // Every slot Hugh draws is declared once, in the table the icon script
+        // reads out of the source.
+        assert!(
+            crate::config::ICONS
+                .iter()
+                .any(|(slot, icon)| *slot == "flagged" && *icon == "shield-alert")
+        );
+        assert!(
+            !crate::config::ICONS
+                .iter()
+                .any(|(slot, _)| *slot == "not-a-slot")
+        );
 
         let branded = branded_config();
         assert_eq!(branded.icon("flagged"), "<:flagged:123456789012345678>");
@@ -1066,9 +1076,24 @@ safe = \"<:safe:123456789012345679>\"",
         assert_eq!(button["custom_id"], "check_pin:roblox_user:77");
         assert!(is_pin_button(button["custom_id"].as_str().unwrap()));
         assert_eq!(button["label"].as_str().unwrap(), "Pin for everyone");
-        // The fallback icon is a unicode emoji, so it parses into the button's
-        // own emoji field rather than being printed in the label.
-        assert_eq!(button["emoji"]["name"].as_str().unwrap(), "📌");
+        // Nothing is configured, so the button carries no emoji at all rather
+        // than an empty one Discord would reject.
+        assert!(button["emoji"].is_null());
+
+        // A plain emoji belongs in the button's own emoji field, not the label,
+        // which is plain text.
+        let unicode: Config = toml::from_str(
+            "guild_id = \"1\"
+
+[icons]
+pin = \"📌\"",
+        )
+        .unwrap();
+        let row = serde_json::to_value(outcome.pin_button(&unicode)).unwrap();
+        assert_eq!(
+            row["components"][0]["emoji"]["name"].as_str().unwrap(),
+            "📌"
+        );
 
         let custom: Config = toml::from_str(
             "guild_id = \"1\"

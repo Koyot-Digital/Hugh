@@ -16,9 +16,11 @@ use crate::{
     config::{Config, YoungAccountAction},
     detection::{mention_counts, unauthorized_protected_roles},
     incident::{Incident, IncidentReporter},
+    moderation::{ModerationStore, NewPunishment, Punishment},
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
-    state::{MessageDecision, MessageInput, SecurityState},
+    state::{Escalation, MessageDecision, MessageInput, SecurityState},
+    welcome,
 };
 
 pub struct Handler {
@@ -28,6 +30,7 @@ pub struct Handler {
     quarantine: Option<QuarantineStore>,
     quarantine_resources: QuarantineManager,
     rotector: Option<Arc<RotectorClient>>,
+    moderation: ModerationStore,
 }
 
 impl Handler {
@@ -39,6 +42,7 @@ impl Handler {
         quarantine: Option<QuarantineStore>,
         quarantine_resources: QuarantineManager,
         rotector: Option<Arc<RotectorClient>>,
+        moderation: ModerationStore,
     ) -> Self {
         Self {
             config,
@@ -47,6 +51,7 @@ impl Handler {
             quarantine,
             quarantine_resources,
             rotector,
+            moderation,
         }
     }
 
@@ -90,14 +95,27 @@ impl Handler {
         parsed_mentions.direct = parsed_mentions.direct.max(resolved_mentions);
         let total_mentions = parsed_mentions.total();
         let mentioned_roles: Vec<u64> = message.mention_roles.iter().map(|id| id.get()).collect();
+        // A member's own record decides how tightly the limits are drawn
+        // around them, so the standing lookup comes before the inspection.
+        let strictness = self
+            .moderation
+            .strictness(message.author.id.get(), &self.config)
+            .await;
+        let account_age_seconds = Utc::now()
+            .timestamp()
+            .saturating_sub(message.author.created_at().unix_timestamp())
+            .max(0);
         let input = MessageInput {
             user_id: message.author.id.get(),
+            channel_id: message.channel_id.get(),
             content: &message.content,
             total_mentions,
             everyone_mentions,
             mentioned_roles: &mentioned_roles,
             attachment_count: message.attachments.len(),
             count_towards_rate_limits: !is_edit,
+            account_age_seconds,
+            strictness,
         };
         let decision = self
             .state
@@ -144,32 +162,54 @@ impl Handler {
         }
 
         let automated_sender = message.author.bot || message.webhook_id.is_some();
-        let timeout_result = if decision.timeout_seconds > 0 && !automated_sender {
-            Some(
-                match timeout_member(ctx, guild_id, message.author.id, decision.timeout_seconds)
-                    .await
-                {
-                    Ok(()) => true,
-                    Err(error) => {
-                        error!(
-                            ?error,
-                            user_id = message.author.id.get(),
-                            "failed to time out member"
-                        );
-                        false
-                    }
-                },
-            )
-        } else {
-            None
+        // An escalation to kick or ban supersedes the timeout: there is no
+        // point timing out somebody who is about to be removed.
+        let escalation = decision
+            .escalation
+            .filter(|_| !automated_sender)
+            .filter(|step| *step != Escalation::Timeout);
+        let timeout_result =
+            if decision.timeout_seconds > 0 && !automated_sender && escalation.is_none() {
+                Some(
+                    match timeout_member(ctx, guild_id, message.author.id, decision.timeout_seconds)
+                        .await
+                    {
+                        Ok(()) => true,
+                        Err(error) => {
+                            error!(
+                                ?error,
+                                user_id = message.author.id.get(),
+                                "failed to time out member"
+                            );
+                            false
+                        }
+                    },
+                )
+            } else {
+                None
+            };
+        let escalation_result = match escalation {
+            Some(step) => Some((
+                step,
+                self.escalate(ctx, guild_id, &message, step, &reasons).await,
+            )),
+            None => None,
         };
-        let action = match (delete_result.is_ok(), timeout_result) {
-            (true, Some(true)) => "message_deleted_and_member_timed_out",
-            (true, Some(false)) => "message_deleted_timeout_failed",
-            (false, Some(true)) => "member_timed_out_delete_failed",
-            (false, Some(false)) => "enforcement_failed",
-            (true, None) => "message_deleted",
-            (false, None) => "delete_failed",
+
+        let action = match escalation_result {
+            Some((Escalation::Kick, true)) => "message_deleted_and_member_kicked",
+            Some((Escalation::Ban, true)) => "message_deleted_and_member_banned",
+            Some((_, false)) => "escalation_failed",
+            Some((Escalation::Timeout, true)) | None => {
+                match (delete_result.is_ok(), timeout_result) {
+                    (true, Some(true)) => "message_deleted_and_member_timed_out",
+                    (true, Some(false)) => "message_deleted_timeout_failed",
+                    (false, Some(true)) => "member_timed_out_delete_failed",
+                    (false, Some(false)) => "enforcement_failed",
+                    (true, None) => "message_deleted",
+                    (false, None) => "delete_failed",
+                }
+            }
         };
 
         let mut incident = Incident::new("message_guard", self.config.guild_id, action, reasons);
@@ -184,7 +224,121 @@ impl Handler {
             timeout_result,
             automated_sender,
         );
-        self.incidents.report(&ctx.http, incident).await;
+        let case_id = self.incidents.report(&ctx.http, incident).await;
+
+        if !automated_sender {
+            self.record_automod_case(
+                case_id,
+                message.author.id.get(),
+                &decision,
+                escalation_result,
+                timeout_result,
+            )
+            .await;
+        }
+    }
+
+    /// Writes an automod hit onto the member's record, so repeated enforcement
+    /// shows up in `/modlogs` and keeps costing them standing.
+    async fn record_automod_case(
+        &self,
+        case_id: u64,
+        user_id: u64,
+        decision: &MessageDecision,
+        escalation: Option<(Escalation, bool)>,
+        timeout_applied: Option<bool>,
+    ) {
+        if decision.weight <= 0.0 {
+            return;
+        }
+        let escalated_ban_seconds = self.config.escalation.ban_duration_seconds;
+        let kind = match escalation {
+            Some((Escalation::Kick, true)) => Punishment::Kick,
+            Some((Escalation::Ban, true)) if escalated_ban_seconds > 0 => Punishment::TemporaryBan,
+            Some((Escalation::Ban, true)) => Punishment::Ban,
+            _ if timeout_applied == Some(true) => Punishment::Timeout,
+            _ => Punishment::Automod,
+        };
+        let duration_seconds = match kind {
+            Punishment::Timeout => Some(decision.timeout_seconds),
+            Punishment::TemporaryBan => Some(escalated_ban_seconds),
+            _ => None,
+        };
+        let weight = decision
+            .weight
+            .max(kind.weight(&self.config.standing.punishments));
+        if let Err(error) = self
+            .moderation
+            .record(NewPunishment {
+                case_id,
+                user_id,
+                kind,
+                reason: decision
+                    .violations
+                    .iter()
+                    .map(|violation| violation.label())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                moderator_id: None,
+                duration_seconds,
+                weight,
+            })
+            .await
+        {
+            error!(?error, case_id, "failed to record the automod case");
+        }
+    }
+
+    /// Carries out an escalated kick or ban. Returns whether Discord accepted
+    /// it, which decides the outcome written on the case card.
+    async fn escalate(
+        &self,
+        ctx: &Context,
+        guild_id: GuildId,
+        message: &Message,
+        step: Escalation,
+        reasons: &str,
+    ) -> bool {
+        let reason = format!("Hugh automod escalation: {reasons}");
+        let result = match step {
+            Escalation::Timeout => return true,
+            Escalation::Kick => {
+                guild_id
+                    .kick_with_reason(&ctx.http, message.author.id, &reason)
+                    .await
+            }
+            Escalation::Ban => {
+                // Escalated bans delete nothing by default: Hugh has already
+                // removed the message that earned the ban.
+                guild_id
+                    .ban_with_reason(
+                        &ctx.http,
+                        message.author.id,
+                        self.config.moderation.ban_delete_message_days.min(7),
+                        &reason,
+                    )
+                    .await
+            }
+        };
+        match result {
+            Ok(()) => {
+                info!(
+                    user_id = message.author.id.get(),
+                    step = step.as_str(),
+                    "automod escalated"
+                );
+                true
+            }
+            Err(error) => {
+                error!(
+                    ?error,
+                    user_id = message.author.id.get(),
+                    step = step.as_str(),
+                    "automod escalation failed"
+                );
+                false
+            }
+        }
     }
 
     async fn handle_join(&self, ctx: &Context, mut member: Member) {
@@ -222,8 +376,24 @@ impl Handler {
             self.incidents.report(&ctx.http, incident).await;
         }
 
+        let removed = self.screen_join(ctx, &mut member, decision).await;
+        // A member Hugh just removed is not welcomed, and neither is anybody
+        // arriving in the middle of a raid.
+        if !removed {
+            welcome::greet(ctx, &self.config, &member, decision.raid_active).await;
+        }
+    }
+
+    /// Applies the account-age policy to a new member. Returns whether they
+    /// were removed from the server.
+    async fn screen_join(
+        &self,
+        ctx: &Context,
+        member: &mut Member,
+        decision: crate::state::JoinDecision,
+    ) -> bool {
         if self.config.trusted_user_ids.contains(&member.user.id.get()) {
-            return;
+            return false;
         }
 
         let policy = if decision.raid_active && decision.young_account {
@@ -246,13 +416,13 @@ impl Handler {
             None
         };
         let Some((kind, reason, configured_action, timeout_seconds)) = policy else {
-            return;
+            return false;
         };
 
         let (action, result) = match configured_action {
             YoungAccountAction::Log => ("logged", Ok(())),
             YoungAccountAction::Timeout => {
-                let result = timeout_existing_member(ctx, &mut member, timeout_seconds).await;
+                let result = timeout_existing_member(ctx, member, timeout_seconds).await;
                 ("timed_out", result)
             }
             YoungAccountAction::Kick => {
@@ -263,7 +433,8 @@ impl Handler {
             }
         };
 
-        let final_action = if result.is_ok() {
+        let enforced = result.is_ok();
+        let final_action = if enforced {
             action
         } else {
             "enforcement_failed"
@@ -290,6 +461,7 @@ impl Handler {
                 .insert("timeout_seconds".into(), timeout_seconds.into());
         }
         self.incidents.report(&ctx.http, incident).await;
+        enforced && matches!(configured_action, YoungAccountAction::Kick)
     }
 
     async fn handle_member_update(&self, ctx: &Context, member: Member) {
@@ -456,11 +628,14 @@ impl EventHandler for Handler {
         commands::handle(
             &ctx,
             interaction,
-            &self.config,
-            self.quarantine.as_ref(),
-            &self.quarantine_resources,
-            &self.incidents,
-            self.rotector.as_deref(),
+            &commands::Services {
+                config: &self.config,
+                quarantine: self.quarantine.as_ref(),
+                quarantine_resources: &self.quarantine_resources,
+                incidents: &self.incidents,
+                rotector: self.rotector.as_deref(),
+                moderation: &self.moderation,
+            },
         )
         .await;
     }
@@ -507,6 +682,7 @@ fn message_evidence(
         ("attachment_count", message.attachments.len()),
         ("link_count", decision.link_count),
         ("coordinated_users", decision.coordinated_users),
+        ("hop_channels", decision.hop_channels),
     ] {
         if count > 0 {
             details.insert(key.into(), count.into());
@@ -519,6 +695,16 @@ fn message_evidence(
     }
     if let Some(domain) = &decision.blocked_domain {
         details.insert("blocked_domain".into(), domain.clone().into());
+    }
+    if let Some(phrase) = &decision.blocked_phrase {
+        details.insert("blocked_phrase".into(), phrase.clone().into());
+    }
+    if decision.weight > 0.0 {
+        details.insert("weight".into(), decision.weight.into());
+        details.insert("recent_weight".into(), decision.recent_weight.into());
+    }
+    if let Some(step) = decision.escalation {
+        details.insert("escalated".into(), step.as_str().into());
     }
     details
 }

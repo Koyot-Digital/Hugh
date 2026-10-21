@@ -79,6 +79,156 @@ enabled = true
 protected_role_ids = ["123456789012345680"]
 authorized_member_ids = ["123456789012345679"]
 
+[automod]
+enabled = true
+# Share of letters that may be uppercase, from 0.0 to 1.0. Use 1.0 or more to
+# accept any amount of shouting.
+max_caps_ratio = 0.8
+# Shorter messages are never judged for shouting: a three-letter message is
+# uppercase by accident as often as by intent.
+caps_min_letters = 12
+# Longest run of one repeated character, as in "aaaaaaaaaaaa".
+max_repeated_characters = 10
+# Emoji per message, counting both Unicode and custom <:name:id> emoji.
+max_emoji = 12
+# Longest run of combining marks, which is what stacks "zalgo" text.
+max_combining_marks = 6
+# Case-insensitive substrings Hugh refuses. Matching happens with zero-width
+# padding stripped, so a padded phrase cannot slip through.
+blocked_phrases = []
+# Distinct channels one member may repeat a message across inside the window
+# before it counts as walking a single message around the server.
+channel_hop_threshold = 3
+channel_hop_window_seconds = 20
+# Accounts younger than this may not post links. Zero disables the check.
+new_account_link_age_seconds = 0
+timeout_seconds = 600
+
+# Automatic escalation. Hugh adds the weight of every automod hit to a rolling
+# per-member total and steps the response up as that total climbs, so a member
+# who trips one guard after another stops being handled one message at a time.
+[escalation]
+enabled = true
+# How long an automod hit keeps counting towards the running total.
+window_seconds = 3600
+# Accumulated weight at which each step takes over. Zero disables a step, and a
+# member's standing scales every threshold.
+timeout_at = 14.0
+kick_at = 32.0
+ban_at = 60.0
+# Timeout the escalated step applies, before standing scaling.
+timeout_seconds = 3600
+# Length of an escalated ban. Zero bans permanently.
+ban_duration_seconds = 0
+
+# Standing: one number per member, carried by their moderation record. Every
+# punishment takes its weight off, and that weight fades back over decay_days,
+# so an old warning stops counting while a fresh one bites. The worse a
+# member's standing, the tighter the automod limits they are held to.
+[standing]
+enabled = true
+starting_points = 100.0
+decay_days = 90.0
+# Lower bound of each band, descending. A member sits in the best band whose
+# bound they still meet; below poor_at they are in the worst band.
+exemplary_at = 95.0
+good_at = 80.0
+neutral_at = 60.0
+poor_at = 35.0
+
+# Weight each kind of punishment takes off a member's standing.
+[standing.punishments]
+warn = 8.0
+timeout = 12.0
+kick = 25.0
+ban = 60.0
+temporary_ban = 40.0
+quarantine = 20.0
+# Used for an automod hit whose violations carry no weight of their own.
+automod = 3.0
+
+# Weight each automod violation contributes, both to the escalation total and
+# to the standing cost of the resulting case.
+[standing.violations]
+mass_mention = 6.0
+everyone_mention = 10.0
+protected_role_ping = 6.0
+message_flood = 5.0
+duplicate_spam = 5.0
+coordinated_spam = 12.0
+unapproved_invite = 10.0
+link_flood = 4.0
+attachment_flood = 3.0
+excessive_newlines = 2.0
+blocked_domain = 14.0
+excessive_caps = 2.0
+repeated_characters = 2.0
+emoji_flood = 2.0
+zalgo_text = 4.0
+blocked_phrase = 12.0
+channel_hop_spam = 10.0
+new_account_link = 8.0
+
+# How hard the limits bite in each band. "thresholds" scales every counted
+# limit, so below 1.0 a member trips guards sooner; "timeouts" scales the
+# resulting timeout. Neutral is the baseline every limit is written against.
+[standing.strictness.exemplary]
+thresholds = 1.25
+timeouts = 0.75
+
+[standing.strictness.good]
+thresholds = 1.1
+timeouts = 0.9
+
+[standing.strictness.neutral]
+thresholds = 1.0
+timeouts = 1.0
+
+[standing.strictness.poor]
+thresholds = 0.65
+timeouts = 1.5
+
+[standing.strictness.bad]
+thresholds = 0.4
+timeouts = 2.5
+
+# The moderation record behind /modlogs, /standing and the sweep that lifts
+# expired temporary bans. The record itself is always kept, because standing
+# and escalation are built on it; "enabled" only registers the commands.
+[moderation]
+enabled = true
+store_path = "data/moderation.jsonl"
+# Days of the banned member's messages Discord removes, from 0 to 7.
+ban_delete_message_days = 0
+# Tell the member why before Hugh acts. A closed DM is not an error.
+dm_on_action = true
+# Longest duration /ban accepts, in seconds. Zero allows any length.
+max_ban_duration_seconds = 0
+# How often Hugh looks for temporary bans that have run out.
+expiry_sweep_seconds = 60
+# Cases shown by one /modlogs call.
+modlog_page_size = 10
+
+[welcome]
+enabled = false
+# channel_id = "123456789012345682"
+# Placeholders: {user} mention, {username}, {display}, {server}, {count},
+# {ordinal}, {id}. An unknown placeholder is left in place, so a typo shows up
+# in the channel rather than vanishing.
+message = "Welcome to {server}, {user}, you're the {ordinal} member!"
+skip_bots = true
+# Stay quiet while raid mode is on, so a join flood cannot turn the welcome
+# channel into the raid.
+skip_during_raid = true
+
+# Who /lock silences. With no roles listed it falls back to @everyone, which is
+# what a lock means in a server that has not split its roles up.
+[lock]
+restricted_role_ids = []
+# Roles /lock leaves able to speak, by way of an explicit allow that outranks
+# the deny above it.
+bypass_role_ids = []
+
 [quarantine]
 enabled = true
 # Hugh creates or reuses resources with these exact names. Advanced deployments
@@ -135,16 +285,25 @@ help = "everyone"
 hugh = "everyone"
 check = "moderator"
 lock = "moderator"
+unlock = "moderator"
 banish = "moderator"
 unbanish = "moderator"
+warn = "moderator"
+kick = "moderator"
+ban = "admin"
+unban = "admin"
+unwarn = "admin"
+modlogs = "helper"
+standing = "helper"
 scrape = "owner"
 
-# Icons used on case and lookup cards. Every slot has a plain-emoji fallback,
-# so this whole section is optional. Upload Lucide-style emoji to the server and
-# paste them here as <:name:id> to brand the cards. Slots: case, reason, details,
-# pin, member, moderator, channel, deleted, timeout, kicked, raid, join, role,
-# quarantine, release, lock, denied, failed, flagged, safe, review, unknown,
-# roblox, discord, group, source, forum, image.
+# Icons used on case and lookup cards. An unset slot renders as nothing at all,
+# so this whole section is optional and Hugh never substitutes an emoji of its
+# own. Upload Lucide-style emoji to the server and paste them here as
+# <:name:id> to brand the cards. Slots: case, pin, warn, ban, unban, standing,
+# welcome, reason, details, member, moderator, channel, deleted, timeout,
+# kicked, raid, join, role, quarantine, release, lock, denied, failed, flagged,
+# safe, review, unknown, roblox, discord, group, source, forum, image.
 [icons]
 # flagged = "<:shield_alert:123456789012345678>"
 # safe = "<:badge_check:123456789012345678>"

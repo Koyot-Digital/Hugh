@@ -33,7 +33,10 @@ pub async fn greet(ctx: &Context, config: &Config, member: &Member, raid_active:
     let message = CreateMessage::new()
         .content(content)
         .allowed_mentions(CreateAllowedMentions::new().users(vec![member.user.id]));
-    if let Err(error) = ChannelId::new(channel_id).send_message(&ctx.http, message).await {
+    if let Err(error) = ChannelId::new(channel_id)
+        .send_message(&ctx.http, message)
+        .await
+    {
         error!(
             ?error,
             channel_id,
@@ -46,6 +49,7 @@ pub async fn greet(ctx: &Context, config: &Config, member: &Member, raid_active:
 /// Fills a welcome template in. Unknown placeholders are left alone so a typo
 /// is visible in the channel rather than silently swallowed.
 #[must_use]
+#[allow(clippy::literal_string_with_formatting_args)]
 pub fn render(template: &str, member: &Member, server: &str, count: Option<u64>) -> String {
     let user = &member.user;
     let display = member
