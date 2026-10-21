@@ -234,8 +234,8 @@ fn incident_embed(incident: &Incident, config: &Config) -> CreateEmbed {
     let headline = action_phrase(&incident.action);
     let mut embed = CreateEmbed::new()
         .title(format!(
-            "{} Case #{} · {headline}",
-            config.icon(action_icon(&incident.action)),
+            "{}Case #{} · {headline}",
+            config.mark(action_icon(&incident.action)),
             incident.case_id
         ))
         .colour(action_colour(&incident.action));
@@ -264,19 +264,19 @@ fn incident_embed(incident: &Incident, config: &Config) -> CreateEmbed {
     let mut references = Vec::new();
     if let Some(subject) = &incident.subject {
         let tag = if subject.bot { " *(app)*" } else { "" };
-        references.push(format!("{} <@{}>{tag}", config.icon("member"), subject.id));
+        references.push(format!("{}<@{}>{tag}", config.mark("member"), subject.id));
     }
     if let Some(channel_id) = incident.channel_id {
-        references.push(format!("{} <#{channel_id}>", config.icon("channel")));
+        references.push(format!("{}<#{channel_id}>", config.mark("channel")));
     }
     references.push(incident.moderator.as_ref().map_or_else(
-        || format!("{} Hugh · automatic", config.icon("moderator")),
-        |user| format!("{} <@{}>", config.icon("moderator"), user.id),
+        || format!("{}Hugh · automatic", config.mark("moderator")),
+        |user| format!("{}<@{}>", config.mark("moderator"), user.id),
     ));
 
     embed = embed.description(format!(
-        "{} **{}**\n{}",
-        config.icon("reason"),
+        "{}**{}**\n{}",
+        config.mark("reason"),
         truncate(&incident.reason, 1_500),
         references.join("  ·  ")
     ));
@@ -284,14 +284,14 @@ fn incident_embed(incident: &Incident, config: &Config) -> CreateEmbed {
     let details = format_evidence(&incident.details);
     if !details.is_empty() {
         embed = embed.field(
-            format!("{} Details", config.icon("details")),
+            format!("{}Details", config.mark("details")),
             truncate(&details, 1_024),
             false,
         );
     }
     if let Some(subject) = &incident.subject {
         embed = embed.field(
-            format!("{} Discord ID", config.icon("member")),
+            format!("{}Discord ID", config.mark("member")),
             format!("`{}`", subject.id),
             true,
         );

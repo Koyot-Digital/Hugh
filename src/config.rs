@@ -39,6 +39,18 @@ pub struct Config {
     #[serde(default)]
     pub role_guard: RoleGuardConfig,
     #[serde(default)]
+    pub automod: AutomodConfig,
+    #[serde(default)]
+    pub escalation: EscalationConfig,
+    #[serde(default)]
+    pub standing: StandingConfig,
+    #[serde(default)]
+    pub moderation: ModerationConfig,
+    #[serde(default)]
+    pub welcome: WelcomeConfig,
+    #[serde(default)]
+    pub lock: LockConfig,
+    #[serde(default)]
     pub quarantine: QuarantineConfig,
     #[serde(default)]
     pub rotector: RotectorConfig,
@@ -216,6 +228,455 @@ pub struct RoleGuardConfig {
     pub authorized_member_ids: HashSet<u64>,
 }
 
+/// Content shape checks that go beyond counting links and attachments. Every
+/// limit is disabled by setting it to zero, so an operator can adopt them one
+/// at a time.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutomodConfig {
+    pub enabled: bool,
+    /// Share of letters that may be uppercase, from 0.0 to 1.0. A value of
+    /// 1.0 or more accepts any amount of shouting.
+    pub max_caps_ratio: f64,
+    /// Messages shorter than this are never judged for shouting, because a
+    /// three-letter message is uppercase by accident as often as by intent.
+    pub caps_min_letters: usize,
+    /// Longest run of one repeated character, as in `aaaaaaaaaaaa`.
+    pub max_repeated_characters: usize,
+    /// Emoji per message, counting both Unicode and custom `<:name:id>` emoji.
+    pub max_emoji: usize,
+    /// Longest run of combining marks, which is what stacks "zalgo" text.
+    pub max_combining_marks: usize,
+    /// Case-insensitive substrings Hugh refuses. Matching is on the message
+    /// with its zero-width characters stripped, so padding does not hide one.
+    pub blocked_phrases: Vec<String>,
+    /// Distinct channels one member may repeat a message across inside
+    /// `channel_hop_window_seconds` before it counts as channel hopping.
+    pub channel_hop_threshold: usize,
+    pub channel_hop_window_seconds: u64,
+    /// Accounts younger than this may not post links. Zero disables the check.
+    pub new_account_link_age_seconds: i64,
+    pub timeout_seconds: u64,
+}
+
+impl Default for AutomodConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_caps_ratio: 0.8,
+            caps_min_letters: 12,
+            max_repeated_characters: 10,
+            max_emoji: 12,
+            max_combining_marks: 6,
+            blocked_phrases: Vec::new(),
+            channel_hop_threshold: 3,
+            channel_hop_window_seconds: 20,
+            new_account_link_age_seconds: 0,
+            timeout_seconds: 600,
+        }
+    }
+}
+
+/// Automatic escalation. Hugh adds the weight of every automod hit to a rolling
+/// per-member total and steps up the response as that total climbs, so a member
+/// who trips one guard after another stops being handled one message at a time.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EscalationConfig {
+    pub enabled: bool,
+    /// How long an automod hit keeps counting towards the running total.
+    pub window_seconds: u64,
+    /// Accumulated weight at which each step takes over. Zero disables a step,
+    /// and a member's standing scales every threshold.
+    pub timeout_at: f64,
+    pub kick_at: f64,
+    pub ban_at: f64,
+    /// Timeout applied by the escalated step, before standing scaling.
+    pub timeout_seconds: u64,
+    /// Length of an escalated ban. Zero bans permanently.
+    pub ban_duration_seconds: u64,
+}
+
+impl Default for EscalationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window_seconds: 3_600,
+            timeout_at: 14.0,
+            kick_at: 32.0,
+            ban_at: 60.0,
+            timeout_seconds: 3_600,
+            ban_duration_seconds: 0,
+        }
+    }
+}
+
+/// Weight each kind of punishment takes off a member's standing.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PunishmentWeights {
+    pub warn: f64,
+    pub timeout: f64,
+    pub kick: f64,
+    pub ban: f64,
+    pub temporary_ban: f64,
+    pub quarantine: f64,
+    /// Used for an automod hit whose violations carry no weight of their own.
+    pub automod: f64,
+}
+
+impl Default for PunishmentWeights {
+    fn default() -> Self {
+        Self {
+            warn: 8.0,
+            timeout: 12.0,
+            kick: 25.0,
+            ban: 60.0,
+            temporary_ban: 40.0,
+            quarantine: 20.0,
+            automod: 3.0,
+        }
+    }
+}
+
+/// Weight each automod violation contributes, both to the escalation total and
+/// to the standing cost of the resulting case.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ViolationWeights {
+    pub mass_mention: f64,
+    pub everyone_mention: f64,
+    pub protected_role_ping: f64,
+    pub message_flood: f64,
+    pub duplicate_spam: f64,
+    pub coordinated_spam: f64,
+    pub unapproved_invite: f64,
+    pub link_flood: f64,
+    pub attachment_flood: f64,
+    pub excessive_newlines: f64,
+    pub blocked_domain: f64,
+    pub excessive_caps: f64,
+    pub repeated_characters: f64,
+    pub emoji_flood: f64,
+    pub zalgo_text: f64,
+    pub blocked_phrase: f64,
+    pub channel_hop_spam: f64,
+    pub new_account_link: f64,
+}
+
+impl Default for ViolationWeights {
+    fn default() -> Self {
+        Self {
+            mass_mention: 6.0,
+            everyone_mention: 10.0,
+            protected_role_ping: 6.0,
+            message_flood: 5.0,
+            duplicate_spam: 5.0,
+            coordinated_spam: 12.0,
+            unapproved_invite: 10.0,
+            link_flood: 4.0,
+            attachment_flood: 3.0,
+            excessive_newlines: 2.0,
+            blocked_domain: 14.0,
+            excessive_caps: 2.0,
+            repeated_characters: 2.0,
+            emoji_flood: 2.0,
+            zalgo_text: 4.0,
+            blocked_phrase: 12.0,
+            channel_hop_spam: 10.0,
+            new_account_link: 8.0,
+        }
+    }
+}
+
+/// How hard the automod limits bite at one standing band. `thresholds` scales
+/// every counted limit, so below 1.0 a member trips guards sooner, and
+/// `timeouts` scales the resulting timeout.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Strictness {
+    pub thresholds: f64,
+    pub timeouts: f64,
+}
+
+impl Default for Strictness {
+    fn default() -> Self {
+        Self {
+            thresholds: 1.0,
+            timeouts: 1.0,
+        }
+    }
+}
+
+impl Strictness {
+    /// Scales a counted limit. A limit of zero means "never allowed" and stays
+    /// there; anything else keeps at least one, because a limit scaled to zero
+    /// would delete every message the member sends.
+    #[must_use]
+    pub fn limit(self, limit: usize) -> usize {
+        if limit == 0 {
+            return 0;
+        }
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let scaled = (limit as f64 * self.thresholds).round().max(1.0) as usize;
+        scaled
+    }
+
+    /// Scales a ratio limit, keeping it inside 0.0..=1.0.
+    #[must_use]
+    pub fn ratio(self, ratio: f64) -> f64 {
+        (ratio * self.thresholds).clamp(0.05, 1.0)
+    }
+
+    /// Scales a weight threshold. Worse standing lowers the bar.
+    #[must_use]
+    pub fn threshold(self, weight: f64) -> f64 {
+        weight * self.thresholds
+    }
+
+    /// Scales a punishment length, clamped to Discord's 28-day timeout ceiling.
+    #[must_use]
+    pub fn duration(self, seconds: u64) -> u64 {
+        if seconds == 0 {
+            return 0;
+        }
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let scaled = (seconds as f64 * self.timeouts).round().max(1.0) as u64;
+        scaled.min(28 * 24 * 60 * 60)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StrictnessConfig {
+    pub exemplary: Strictness,
+    pub good: Strictness,
+    pub neutral: Strictness,
+    pub poor: Strictness,
+    pub bad: Strictness,
+}
+
+impl Default for StrictnessConfig {
+    fn default() -> Self {
+        Self {
+            exemplary: Strictness {
+                thresholds: 1.25,
+                timeouts: 0.75,
+            },
+            good: Strictness {
+                thresholds: 1.1,
+                timeouts: 0.9,
+            },
+            neutral: Strictness::default(),
+            poor: Strictness {
+                thresholds: 0.65,
+                timeouts: 1.5,
+            },
+            bad: Strictness {
+                thresholds: 0.4,
+                timeouts: 2.5,
+            },
+        }
+    }
+}
+
+/// A member's standing band, best to worst.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StandingBand {
+    #[default]
+    Exemplary,
+    Good,
+    Neutral,
+    Poor,
+    Bad,
+}
+
+impl StandingBand {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exemplary => "exemplary",
+            Self::Good => "good",
+            Self::Neutral => "neutral",
+            Self::Poor => "poor",
+            Self::Bad => "bad",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Exemplary => "Exemplary",
+            Self::Good => "Good",
+            Self::Neutral => "Neutral",
+            Self::Poor => "Poor",
+            Self::Bad => "Bad",
+        }
+    }
+
+    /// Icon slot used on standing cards.
+    #[must_use]
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::Exemplary | Self::Good => "safe",
+            Self::Neutral => "review",
+            Self::Poor => "flagged",
+            Self::Bad => "denied",
+        }
+    }
+}
+
+/// Standing: one number per member, carried by their moderation history. Every
+/// punishment takes its weight off, and that weight fades back over
+/// `decay_days`, so an old warning stops counting while a fresh one bites.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StandingConfig {
+    pub enabled: bool,
+    /// Standing a member with no history holds.
+    pub starting_points: f64,
+    /// Days over which one punishment's weight decays to nothing.
+    pub decay_days: f64,
+    /// Lower bound of each band, descending. A member sits in the best band
+    /// whose bound they still meet.
+    pub exemplary_at: f64,
+    pub good_at: f64,
+    pub neutral_at: f64,
+    pub poor_at: f64,
+    pub punishments: PunishmentWeights,
+    pub violations: ViolationWeights,
+    pub strictness: StrictnessConfig,
+}
+
+impl Default for StandingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            starting_points: 100.0,
+            decay_days: 90.0,
+            exemplary_at: 95.0,
+            good_at: 80.0,
+            neutral_at: 60.0,
+            poor_at: 35.0,
+            punishments: PunishmentWeights::default(),
+            violations: ViolationWeights::default(),
+            strictness: StrictnessConfig::default(),
+        }
+    }
+}
+
+impl StandingConfig {
+    /// The band `points` falls into.
+    #[must_use]
+    pub fn band(&self, points: f64) -> StandingBand {
+        if points >= self.exemplary_at {
+            StandingBand::Exemplary
+        } else if points >= self.good_at {
+            StandingBand::Good
+        } else if points >= self.neutral_at {
+            StandingBand::Neutral
+        } else if points >= self.poor_at {
+            StandingBand::Poor
+        } else {
+            StandingBand::Bad
+        }
+    }
+
+    /// How hard the automod limits bite at `band`. With standing disabled every
+    /// member is judged by the configured limits exactly as written.
+    #[must_use]
+    pub fn strictness(&self, band: StandingBand) -> Strictness {
+        if !self.enabled {
+            return Strictness::default();
+        }
+        match band {
+            StandingBand::Exemplary => self.strictness.exemplary,
+            StandingBand::Good => self.strictness.good,
+            StandingBand::Neutral => self.strictness.neutral,
+            StandingBand::Poor => self.strictness.poor,
+            StandingBand::Bad => self.strictness.bad,
+        }
+    }
+}
+
+/// The moderation record: who was warned, kicked, timed out or banned, why, and
+/// by whom. It backs `/modlogs`, `/standing`, and the sweep that lifts expired
+/// temporary bans.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModerationConfig {
+    /// Registers `/warn`, `/kick`, `/ban`, `/unban`, `/unwarn`, `/modlogs` and
+    /// `/standing`. The record itself is always kept, because standing and
+    /// escalation are built on it.
+    pub enabled: bool,
+    pub store_path: String,
+    /// Days of the banned member's messages Discord removes, from 0 to 7.
+    pub ban_delete_message_days: u8,
+    /// Tell the member why before Hugh acts. A closed DM is not an error.
+    pub dm_on_action: bool,
+    /// Longest duration `/ban` accepts, in seconds. Zero allows any length.
+    pub max_ban_duration_seconds: u64,
+    /// How often Hugh looks for temporary bans that have run out.
+    pub expiry_sweep_seconds: u64,
+    /// Cases shown by one `/modlogs` call.
+    pub modlog_page_size: usize,
+}
+
+impl Default for ModerationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            store_path: "data/moderation.jsonl".to_owned(),
+            ban_delete_message_days: 0,
+            dm_on_action: true,
+            max_ban_duration_seconds: 0,
+            expiry_sweep_seconds: 60,
+            modlog_page_size: 10,
+        }
+    }
+}
+
+/// The greeting Hugh posts when somebody joins.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WelcomeConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "optional_snowflake")]
+    pub channel_id: Option<u64>,
+    /// Placeholders: `{user}` mention, `{username}`, `{display}`, `{server}`,
+    /// `{count}`, `{ordinal}`, `{id}`.
+    pub message: String,
+    pub skip_bots: bool,
+    /// Stay quiet while raid mode is on, so a join flood cannot turn the
+    /// greeting into the raid's own megaphone.
+    pub skip_during_raid: bool,
+}
+
+impl Default for WelcomeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: None,
+            message: "Welcome to {server}, {user}, you're the {ordinal} member!".to_owned(),
+            skip_bots: true,
+            skip_during_raid: true,
+        }
+    }
+}
+
+/// Who `/lock` silences. With no roles listed it falls back to `@everyone`,
+/// which is what a lock means in a server that has not split its roles up.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LockConfig {
+    #[serde(deserialize_with = "snowflakes")]
+    pub restricted_role_ids: HashSet<u64>,
+    /// Roles `/lock` leaves able to speak, by way of an explicit allow that
+    /// outranks the deny above it.
+    #[serde(deserialize_with = "snowflakes")]
+    pub bypass_role_ids: HashSet<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QuarantineConfig {
@@ -328,38 +789,45 @@ pub struct DiscordPowers {
     pub moderator: bool,
 }
 
-/// Every icon slot Hugh renders, with the plain-emoji fallback used when the
-/// operator has not uploaded a matching custom emoji. Keys are stable; the
-/// Lucide icon each one is modelled on is noted in `docs/configuration.md`.
-pub const ICONS: [(&str, &str); 28] = [
-    ("case", "🗂️"),
-    ("pin", "📌"),
-    ("reason", "📝"),
-    ("details", "🔎"),
-    ("member", "👤"),
-    ("moderator", "🛡️"),
-    ("channel", "#️⃣"),
-    ("deleted", "🗑️"),
-    ("timeout", "⏳"),
-    ("kicked", "🚪"),
-    ("raid", "🚨"),
-    ("join", "🧍"),
-    ("role", "🎭"),
-    ("quarantine", "🔒"),
-    ("release", "🔓"),
-    ("lock", "🔐"),
-    ("denied", "⛔"),
-    ("failed", "❗"),
-    ("flagged", "⚠️"),
-    ("safe", "✅"),
-    ("review", "🕓"),
-    ("unknown", "❔"),
-    ("roblox", "🎮"),
-    ("discord", "💬"),
-    ("group", "👥"),
-    ("source", "📡"),
-    ("forum", "🧵"),
-    ("image", "🖼️"),
+/// Every icon slot Hugh renders, paired with the Lucide icon it is drawn from.
+/// Hugh never prints an emoji of its own: an unconfigured slot renders as
+/// nothing at all, and `scripts/icons.py` downloads this exact set into
+/// `assets/icons` so an operator can upload them as the server's custom emoji
+/// and point `[icons]` at them.
+pub const ICONS: [(&str, &str); 33] = [
+    ("case", "folder-open"),
+    ("pin", "pin"),
+    ("warn", "megaphone"),
+    ("ban", "hammer"),
+    ("unban", "user-round-check"),
+    ("standing", "gauge"),
+    ("welcome", "hand-heart"),
+    ("reason", "file-text"),
+    ("details", "search"),
+    ("member", "user-round"),
+    ("moderator", "shield"),
+    ("channel", "hash"),
+    ("deleted", "message-square-x"),
+    ("timeout", "timer"),
+    ("kicked", "door-open"),
+    ("raid", "siren"),
+    ("join", "user-round-plus"),
+    ("role", "user-round-cog"),
+    ("quarantine", "lock"),
+    ("release", "lock-open"),
+    ("lock", "lock-keyhole"),
+    ("denied", "ban"),
+    ("failed", "triangle-alert"),
+    ("flagged", "shield-alert"),
+    ("safe", "badge-check"),
+    ("review", "clock"),
+    ("unknown", "circle-question-mark"),
+    ("roblox", "gamepad-2"),
+    ("discord", "message-circle"),
+    ("group", "users-round"),
+    ("source", "satellite-dish"),
+    ("forum", "message-square-text"),
+    ("image", "image"),
 ];
 
 /// Whether a value is a bare `:name:` emoji shortcode. Discord expands those
@@ -376,13 +844,21 @@ fn is_emoji_shortcode(value: &str) -> bool {
 }
 
 /// Commands Hugh knows about, with the tier each one needs by default.
-pub const COMMAND_LEVELS: [(&str, AccessLevel); 7] = [
+pub const COMMAND_LEVELS: [(&str, AccessLevel); 15] = [
     ("help", AccessLevel::Everyone),
     ("hugh", AccessLevel::Everyone),
     ("check", AccessLevel::Moderator),
     ("lock", AccessLevel::Moderator),
+    ("unlock", AccessLevel::Moderator),
     ("banish", AccessLevel::Moderator),
     ("unbanish", AccessLevel::Moderator),
+    ("warn", AccessLevel::Moderator),
+    ("kick", AccessLevel::Moderator),
+    ("ban", AccessLevel::Admin),
+    ("unban", AccessLevel::Admin),
+    ("unwarn", AccessLevel::Admin),
+    ("modlogs", AccessLevel::Helper),
+    ("standing", AccessLevel::Helper),
     ("scrape", AccessLevel::Owner),
 ];
 
@@ -487,7 +963,7 @@ impl Config {
         }
         match self.incident_channel_id {
             None => bail!(
-                "incident_channel_id is not set; Hugh posts case cards there itself, so set it to a private staff channel (see docs/setup.md)"
+                "incident_channel_id is not set; it is a top-level key, so in config.toml it must sit above the first [section] header, as a quoted ID: incident_channel_id = \"123456789012345678\" (see docs/setup.md)"
             ),
             Some(0) => bail!("incident_channel_id must be a non-zero Discord ID"),
             Some(_) => {}
@@ -570,8 +1046,135 @@ impl Config {
         }
         self.validate_rotector()?;
         self.validate_scrape()?;
+        self.validate_automod()?;
+        self.validate_standing()?;
+        self.validate_moderation()?;
+        self.validate_welcome()?;
         self.validate_permissions()?;
         self.validate_icons()?;
+        Ok(())
+    }
+
+    fn validate_automod(&self) -> Result<()> {
+        if self.automod.enabled {
+            if !self.automod.max_caps_ratio.is_finite() || self.automod.max_caps_ratio <= 0.0 {
+                bail!(
+                    "automod.max_caps_ratio must be above 0.0; use 1.0 or more to accept any amount of shouting"
+                );
+            }
+            if self.automod.channel_hop_threshold > 0 {
+                positive(
+                    "automod.channel_hop_window_seconds",
+                    &self.automod.channel_hop_window_seconds,
+                )?;
+            }
+            if self.automod.new_account_link_age_seconds < 0 {
+                bail!("automod.new_account_link_age_seconds cannot be negative");
+            }
+            positive("automod.timeout_seconds", &self.automod.timeout_seconds)?;
+            for phrase in &self.automod.blocked_phrases {
+                if phrase.trim().is_empty() {
+                    bail!("automod.blocked_phrases must not contain an empty entry");
+                }
+            }
+        }
+        if self.escalation.enabled {
+            positive("escalation.window_seconds", &self.escalation.window_seconds)?;
+            positive(
+                "escalation.timeout_seconds",
+                &self.escalation.timeout_seconds,
+            )?;
+            for (name, value) in [
+                ("escalation.timeout_at", self.escalation.timeout_at),
+                ("escalation.kick_at", self.escalation.kick_at),
+                ("escalation.ban_at", self.escalation.ban_at),
+            ] {
+                if !value.is_finite() || value < 0.0 {
+                    bail!("{name} must be zero or a positive weight");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_standing(&self) -> Result<()> {
+        if !self.standing.enabled {
+            return Ok(());
+        }
+        let standing = &self.standing;
+        if !standing.starting_points.is_finite() || standing.starting_points <= 0.0 {
+            bail!("standing.starting_points must be a positive number, such as 100");
+        }
+        if !standing.decay_days.is_finite() || standing.decay_days <= 0.0 {
+            bail!("standing.decay_days must be a positive number of days");
+        }
+        let bands = [
+            ("standing.exemplary_at", standing.exemplary_at),
+            ("standing.good_at", standing.good_at),
+            ("standing.neutral_at", standing.neutral_at),
+            ("standing.poor_at", standing.poor_at),
+        ];
+        for (name, value) in bands {
+            if !value.is_finite() || value < 0.0 || value > standing.starting_points {
+                bail!("{name} must be between 0 and standing.starting_points");
+            }
+        }
+        for pair in bands.windows(2) {
+            let (upper, above) = pair[0];
+            let (lower, below) = pair[1];
+            if above <= below {
+                bail!("{upper} must sit above {lower}");
+            }
+        }
+        for (name, strictness) in [
+            ("exemplary", standing.strictness.exemplary),
+            ("good", standing.strictness.good),
+            ("neutral", standing.strictness.neutral),
+            ("poor", standing.strictness.poor),
+            ("bad", standing.strictness.bad),
+        ] {
+            for (field, value) in [
+                ("thresholds", strictness.thresholds),
+                ("timeouts", strictness.timeouts),
+            ] {
+                if !value.is_finite() || !(0.05..=10.0).contains(&value) {
+                    bail!("standing.strictness.{name}.{field} must be between 0.05 and 10.0");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_moderation(&self) -> Result<()> {
+        if self.moderation.store_path.trim().is_empty() {
+            bail!("moderation.store_path must not be empty");
+        }
+        if self.moderation.ban_delete_message_days > 7 {
+            bail!("moderation.ban_delete_message_days must be between 0 and 7");
+        }
+        positive(
+            "moderation.expiry_sweep_seconds",
+            &self.moderation.expiry_sweep_seconds,
+        )?;
+        if !(1..=25).contains(&self.moderation.modlog_page_size) {
+            bail!("moderation.modlog_page_size must be between 1 and 25");
+        }
+        Ok(())
+    }
+
+    fn validate_welcome(&self) -> Result<()> {
+        if !self.welcome.enabled {
+            return Ok(());
+        }
+        match self.welcome.channel_id {
+            None => bail!("welcome is enabled but welcome.channel_id is not set"),
+            Some(0) => bail!("welcome.channel_id must be a non-zero Discord ID"),
+            Some(_) => {}
+        }
+        let message = self.welcome.message.trim();
+        if message.is_empty() || message.chars().count() > 1_800 {
+            bail!("welcome.message must contain 1 to 1800 characters");
+        }
         Ok(())
     }
 
@@ -593,20 +1196,37 @@ impl Config {
         Ok(())
     }
 
-    /// The emoji for an icon slot: the operator's override, else the built-in
-    /// fallback. An unknown slot renders as nothing rather than breaking a card.
+    /// The custom emoji configured for an icon slot. A slot the operator has
+    /// not set, like an unknown slot, renders as nothing rather than falling
+    /// back to an emoji Hugh picked for them.
     #[must_use]
     pub fn icon(&self, slot: &str) -> &str {
         self.icons
             .get(slot)
             .map(|value| value.trim())
-            .or_else(|| {
-                ICONS
-                    .iter()
-                    .find(|(known, _)| *known == slot)
-                    .map(|(_, fallback)| *fallback)
-            })
             .unwrap_or_default()
+    }
+
+    /// An icon slot followed by one space, or nothing at all. Labels built with
+    /// this read correctly whether or not the server has the artwork uploaded.
+    #[must_use]
+    pub fn mark(&self, slot: &str) -> String {
+        let icon = self.icon(slot);
+        if icon.is_empty() {
+            String::new()
+        } else {
+            format!("{icon} ")
+        }
+    }
+
+    /// The Lucide icon a slot is drawn from, for the asset download script and
+    /// the configuration reference.
+    #[must_use]
+    pub fn lucide_icon(slot: &str) -> Option<&'static str> {
+        ICONS
+            .iter()
+            .find(|(known, _)| *known == slot)
+            .map(|(_, icon)| *icon)
     }
 
     fn validate_rotector(&self) -> Result<()> {

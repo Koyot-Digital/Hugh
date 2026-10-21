@@ -200,8 +200,8 @@ pub async fn handle_pin(
             &ctx.http,
             CreateMessage::new()
                 .content(format!(
-                    "{} Lookup pinned by <@{}>",
-                    config.icon("pin"),
+                    "{}Lookup pinned by <@{}>",
+                    config.mark("pin"),
                     component.user.id.get()
                 ))
                 .allowed_mentions(CreateAllowedMentions::new())
@@ -219,8 +219,8 @@ pub async fn handle_pin(
             CreateInteractionResponse::UpdateMessage(
                 CreateInteractionResponseMessage::new()
                     .content(format!(
-                        "{} Posted in this channel for everyone: {}",
-                        config.icon("pin"),
+                        "{}Posted in this channel for everyone: {}",
+                        config.mark("pin"),
                         posted.link()
                     ))
                     .embeds(cards.clone())
@@ -392,22 +392,22 @@ fn discord_embed(
     ));
     if let Some(findings) = reason_lines(&data.reasons) {
         embed = embed.field(
-            format!("{} Findings", config.icon("details")),
+            format!("{}Findings", config.mark("details")),
             findings,
             false,
         );
     }
     if data.linked_roblox_accounts.is_empty() {
         embed = embed.field(
-            format!("{} Linked Roblox accounts", config.icon("roblox")),
+            format!("{}Linked Roblox accounts", config.mark("roblox")),
             "None on record",
             true,
         );
     } else {
         embed = embed.field(
             format!(
-                "{} Linked Roblox accounts ({})",
-                config.icon("roblox"),
+                "{}Linked Roblox accounts ({})",
+                config.mark("roblox"),
                 data.linked_roblox_accounts.len()
             ),
             linked_roblox_lines(config, &data.linked_roblox_accounts),
@@ -471,21 +471,21 @@ fn roblox_embed(data: &RobloxUser, flag: FlagType, config: &Config) -> CreateEmb
     ));
     if let Some(category) = readable(data.category_label.as_deref()) {
         embed = embed.field(
-            format!("{} Category", config.icon("flagged")),
+            format!("{}Category", config.mark("flagged")),
             category,
             true,
         );
     }
     if let Some(findings) = reason_lines(&data.reasons) {
         embed = embed.field(
-            format!("{} Findings", config.icon("details")),
+            format!("{}Findings", config.mark("details")),
             findings,
             false,
         );
     }
     if let Some(provisional) = reason_lines(&data.provisional_reasons) {
         embed = embed.field(
-            format!("{} Awaiting human review", config.icon("review")),
+            format!("{}Awaiting human review", config.mark("review")),
             provisional,
             false,
         );
@@ -510,7 +510,7 @@ fn roblox_embed(data: &RobloxUser, flag: FlagType, config: &Config) -> CreateEmb
     }
     if !notes.is_empty() {
         embed = embed.field(
-            format!("{} Notes", config.icon("case")),
+            format!("{}Notes", config.mark("case")),
             clamp(&notes.join("\n")),
             false,
         );
@@ -558,30 +558,30 @@ fn links_embed(data: &RobloxDiscordLinks, config: &Config) -> CreateEmbed {
     )
     .thumbnail(roblox_headshot(id))
     .description(format!(
-        "{}\n{} **{}** linked Discord account(s)  ·  {} **{}** known alt(s)",
+        "{}\n{}**{}** linked Discord account(s)  ·  {}**{}** known alt(s)",
         roblox_user_ref(id),
-        config.icon("discord"),
+        config.mark("discord"),
         data.discord_accounts.len(),
-        config.icon("roblox"),
+        config.mark("roblox"),
         data.alt_accounts.len()
     ));
     if data.discord_accounts.is_empty() && data.alt_accounts.is_empty() {
         embed = embed.field(
-            format!("{} Nothing on record", config.icon("unknown")),
+            format!("{}Nothing on record", config.mark("unknown")),
             "Rotector has no linked accounts for this user.",
             false,
         );
     }
     if !data.discord_accounts.is_empty() {
         embed = embed.field(
-            format!("{} Discord accounts", config.icon("discord")),
+            format!("{}Discord accounts", config.mark("discord")),
             discord_link_lines(&data.discord_accounts),
             false,
         );
     }
     if !data.alt_accounts.is_empty() {
         embed = embed.field(
-            format!("{} Other Roblox accounts", config.icon("roblox")),
+            format!("{}Other Roblox accounts", config.mark("roblox")),
             alt_lines(&data.alt_accounts),
             false,
         );
@@ -635,7 +635,7 @@ fn group_embed(data: &RobloxGroup, flag: FlagType, config: &Config) -> CreateEmb
     ));
     if let Some(findings) = reason_lines(&data.reasons) {
         embed = embed.field(
-            format!("{} Findings", config.icon("details")),
+            format!("{}Findings", config.mark("details")),
             findings,
             false,
         );
@@ -678,7 +678,7 @@ fn sources_embed(providers: &[Provider], config: &Config) -> CreateEmbed {
             body.push(format!("Appeals: {appeal}"));
         }
         embed = embed.field(
-            format!("{} {}", config.icon("source"), provider.name),
+            format!("{}{}", config.mark("source"), provider.name),
             clamp(&body.join("\n")),
             false,
         );
@@ -696,7 +696,7 @@ fn card(
     profile: Option<&User>,
 ) -> CreateEmbed {
     let mut embed = CreateEmbed::new()
-        .title(format!("{} {title}", config.icon(icon)).trim().to_owned())
+        .title(format!("{}{title}", config.mark(icon)).trim().to_owned())
         .colour(colour);
     if let Some(user) = profile {
         let name = user.global_name.as_ref().map_or_else(
@@ -719,9 +719,9 @@ fn no_record(
 ) -> CreateEmbed {
     card(config, icon, &format!("No record · {kind}"), SLATE, profile)
         .description(format!(
-            "{target}\n\n{} **No record**\nRotector holds nothing for this identifier. That is not \
+            "{target}\n\n{}**No record**\nRotector holds nothing for this identifier. That is not \
              a clean verdict: the account may simply never have been analysed.",
-            config.icon("unknown")
+            config.mark("unknown")
         ))
         .footer(footer("Rotector lookup"))
 }
@@ -744,8 +744,8 @@ fn verdict_block(
     reference: &str,
 ) -> String {
     let mut block = format!(
-        "{reference}\n\n{} {}",
-        config.icon(flag_icon(flag)),
+        "{reference}\n\n{}{}",
+        config.mark(flag_icon(flag)),
         verdict_text(flag, status_label)
     );
     if let Some(header) = readable(header) {
@@ -827,8 +827,8 @@ fn linked_roblox_lines(config: &Config, accounts: &[LinkedRobloxAccount]) -> Str
                 .map(|value| format!(" · <t:{value}:R>"))
                 .unwrap_or_default();
             format!(
-                "{} [{}](https://www.roblox.com/users/{}/profile) — {}{detected}",
-                config.icon(flag_icon(flag)),
+                "{}[{}](https://www.roblox.com/users/{}/profile) — {}{detected}",
+                config.mark(flag_icon(flag)),
                 account.roblox_username.trim(),
                 account.roblox_user_id,
                 flag.label()
@@ -952,6 +952,21 @@ mod tests {
         toml::from_str("guild_id = \"1\"").unwrap()
     }
 
+    /// A server that has uploaded the Lucide artwork and filled two slots in.
+    fn branded_config() -> Config {
+        let config: Config = toml::from_str(
+            "guild_id = \"1\"
+incident_channel_id = \"2\"
+
+[icons]
+flagged = \"<:flagged:123456789012345678>\"
+safe = \"<:safe:123456789012345679>\"",
+        )
+        .unwrap();
+        config.validate().unwrap();
+        config
+    }
+
     fn reason(title: &str, summary: Option<&str>) -> Reason {
         Reason {
             kind: title.to_lowercase(),
@@ -1004,28 +1019,32 @@ mod tests {
             Some("  Known predatory account  "),
             "<@42>",
         );
-        assert!(block.starts_with("<@42>\n\n⚠️ **Confirmed** · Unsafe"));
+        assert!(block.starts_with("<@42>\n\n**Confirmed** · Unsafe"));
         assert!(block.ends_with("Known predatory account"));
-        // Safe results get their own glyph.
+        // With the artwork uploaded, the slot leads the verdict.
+        let branded = branded_config();
         assert!(
-            verdict_block(&config, FlagType::Safe, None, None, "<@42>")
-                .contains("✅ **No findings**")
+            verdict_block(&branded, FlagType::Safe, None, None, "<@42>")
+                .contains("<:safe:123456789012345679> **No findings**")
         );
     }
 
+    /// An unset slot renders as nothing at all: Hugh never substitutes an emoji
+    /// of its own, and `mark` leaves no stranded space behind in the label.
     #[test]
-    fn icon_slots_fall_back_and_accept_overrides() {
+    fn icon_slots_are_empty_until_configured() {
         let config = config();
-        assert_eq!(config.icon("flagged"), "⚠️");
+        assert_eq!(config.icon("flagged"), "");
+        assert_eq!(config.mark("flagged"), "");
         assert_eq!(config.icon("not-a-slot"), "");
+        assert_eq!(Config::lucide_icon("flagged"), Some("shield-alert"));
+        assert_eq!(Config::lucide_icon("not-a-slot"), None);
 
-        let custom: Config = toml::from_str(
-            "guild_id = \"1\"\nincident_channel_id = \"2\"\n\n[icons]\nflagged = \"<:shield_alert:123456789012345678>\"",
-        )
-        .unwrap();
-        custom.validate().unwrap();
-        assert_eq!(custom.icon("flagged"), "<:shield_alert:123456789012345678>");
-        assert_eq!(custom.icon("safe"), "✅");
+        let branded = branded_config();
+        assert_eq!(branded.icon("flagged"), "<:flagged:123456789012345678>");
+        assert_eq!(branded.mark("flagged"), "<:flagged:123456789012345678> ");
+        assert_eq!(branded.icon("review"), "");
+        assert_eq!(branded.mark("review"), "");
     }
 
     #[test]

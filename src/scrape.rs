@@ -741,21 +741,21 @@ fn summary_embed(
     )];
     if totals.more_available {
         description.push(format!(
-            "{} The newest posts were taken first; raise `limit` or `scrape.max_posts` to reach further back.",
-            config.icon("review")
+            "{}The newest posts were taken first; raise `limit` or `scrape.max_posts` to reach further back.",
+            config.mark("review")
         ));
     }
     if totals.unreadable > 0 {
         description.push(format!(
-            "{} {} post(s) had no readable opening message and are marked as such in the file.",
-            config.icon("failed"),
+            "{}{} post(s) had no readable opening message and are marked as such in the file.",
+            config.mark("failed"),
             totals.unreadable
         ));
     }
     if totals.clipped > 0 {
         description.push(format!(
-            "{} {} post(s) hold more replies than the per-post cap.",
-            config.icon("review"),
+            "{}{} post(s) hold more replies than the per-post cap.",
+            config.mark("review"),
             totals.clipped
         ));
     }
@@ -788,14 +788,14 @@ fn summary_embed(
 
     CreateEmbed::new()
         .title(format!(
-            "{} Forum export · #{}",
-            config.icon("forum"),
+            "{}Forum export · #{}",
+            config.mark("forum"),
             forum.name
         ))
         .colour(NEUTRAL)
         .description(description.join("\n"))
         .field(
-            format!("{} Posts", config.icon("forum")),
+            format!("{}Posts", config.mark("forum")),
             format!(
                 "{} active · {} archived",
                 totals.posts.saturating_sub(totals.archived),
@@ -804,21 +804,21 @@ fn summary_embed(
             true,
         )
         .field(
-            format!("{} Images", config.icon("image")),
+            format!("{}Images", config.mark("image")),
             format!(
                 "{} image(s) · {} other file(s)",
                 totals.images, totals.files
             ),
             true,
         )
-        .field(format!("{} Replies", config.icon("details")), replies, true)
+        .field(format!("{}Replies", config.mark("details")), replies, true)
         .field(
-            format!("{} Export", config.icon("case")),
+            format!("{}Export", config.mark("case")),
             export_lines.join("\n"),
             false,
         )
         .field(
-            format!("{} Image links expire", config.icon("image")),
+            format!("{}Image links expire", config.mark("image")),
             "Discord signs attachment links, and they stop working after about a day. Every image keeps its message ID, attachment ID and filename, so the links can be refreshed from the API when the archive is loaded.",
             false,
         )

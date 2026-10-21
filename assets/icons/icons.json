@@ -1,0 +1,207 @@
+{
+  "lucide_version": "1.60.0",
+  "license": "ISC, https://github.com/lucide-icons/lucide/blob/main/LICENSE",
+  "stroke": "#E3E5E8",
+  "stroke_width": 2.25,
+  "size": 128,
+  "icons": [
+    {
+      "slot": "case",
+      "lucide": "folder-open",
+      "svg": "svg/case.svg",
+      "png": "png/case.png"
+    },
+    {
+      "slot": "pin",
+      "lucide": "pin",
+      "svg": "svg/pin.svg",
+      "png": "png/pin.png"
+    },
+    {
+      "slot": "warn",
+      "lucide": "megaphone",
+      "svg": "svg/warn.svg",
+      "png": "png/warn.png"
+    },
+    {
+      "slot": "ban",
+      "lucide": "hammer",
+      "svg": "svg/ban.svg",
+      "png": "png/ban.png"
+    },
+    {
+      "slot": "unban",
+      "lucide": "user-round-check",
+      "svg": "svg/unban.svg",
+      "png": "png/unban.png"
+    },
+    {
+      "slot": "standing",
+      "lucide": "gauge",
+      "svg": "svg/standing.svg",
+      "png": "png/standing.png"
+    },
+    {
+      "slot": "welcome",
+      "lucide": "hand-heart",
+      "svg": "svg/welcome.svg",
+      "png": "png/welcome.png"
+    },
+    {
+      "slot": "reason",
+      "lucide": "file-text",
+      "svg": "svg/reason.svg",
+      "png": "png/reason.png"
+    },
+    {
+      "slot": "details",
+      "lucide": "search",
+      "svg": "svg/details.svg",
+      "png": "png/details.png"
+    },
+    {
+      "slot": "member",
+      "lucide": "user-round",
+      "svg": "svg/member.svg",
+      "png": "png/member.png"
+    },
+    {
+      "slot": "moderator",
+      "lucide": "shield",
+      "svg": "svg/moderator.svg",
+      "png": "png/moderator.png"
+    },
+    {
+      "slot": "channel",
+      "lucide": "hash",
+      "svg": "svg/channel.svg",
+      "png": "png/channel.png"
+    },
+    {
+      "slot": "deleted",
+      "lucide": "message-square-x",
+      "svg": "svg/deleted.svg",
+      "png": "png/deleted.png"
+    },
+    {
+      "slot": "timeout",
+      "lucide": "timer",
+      "svg": "svg/timeout.svg",
+      "png": "png/timeout.png"
+    },
+    {
+      "slot": "kicked",
+      "lucide": "door-open",
+      "svg": "svg/kicked.svg",
+      "png": "png/kicked.png"
+    },
+    {
+      "slot": "raid",
+      "lucide": "siren",
+      "svg": "svg/raid.svg",
+      "png": "png/raid.png"
+    },
+    {
+      "slot": "join",
+      "lucide": "user-round-plus",
+      "svg": "svg/join.svg",
+      "png": "png/join.png"
+    },
+    {
+      "slot": "role",
+      "lucide": "user-round-cog",
+      "svg": "svg/role.svg",
+      "png": "png/role.png"
+    },
+    {
+      "slot": "quarantine",
+      "lucide": "lock",
+      "svg": "svg/quarantine.svg",
+      "png": "png/quarantine.png"
+    },
+    {
+      "slot": "release",
+      "lucide": "lock-open",
+      "svg": "svg/release.svg",
+      "png": "png/release.png"
+    },
+    {
+      "slot": "lock",
+      "lucide": "lock-keyhole",
+      "svg": "svg/lock.svg",
+      "png": "png/lock.png"
+    },
+    {
+      "slot": "denied",
+      "lucide": "ban",
+      "svg": "svg/denied.svg",
+      "png": "png/denied.png"
+    },
+    {
+      "slot": "failed",
+      "lucide": "triangle-alert",
+      "svg": "svg/failed.svg",
+      "png": "png/failed.png"
+    },
+    {
+      "slot": "flagged",
+      "lucide": "shield-alert",
+      "svg": "svg/flagged.svg",
+      "png": "png/flagged.png"
+    },
+    {
+      "slot": "safe",
+      "lucide": "badge-check",
+      "svg": "svg/safe.svg",
+      "png": "png/safe.png"
+    },
+    {
+      "slot": "review",
+      "lucide": "clock",
+      "svg": "svg/review.svg",
+      "png": "png/review.png"
+    },
+    {
+      "slot": "unknown",
+      "lucide": "circle-question-mark",
+      "svg": "svg/unknown.svg",
+      "png": "png/unknown.png"
+    },
+    {
+      "slot": "roblox",
+      "lucide": "gamepad-2",
+      "svg": "svg/roblox.svg",
+      "png": "png/roblox.png"
+    },
+    {
+      "slot": "discord",
+      "lucide": "message-circle",
+      "svg": "svg/discord.svg",
+      "png": "png/discord.png"
+    },
+    {
+      "slot": "group",
+      "lucide": "users-round",
+      "svg": "svg/group.svg",
+      "png": "png/group.png"
+    },
+    {
+      "slot": "source",
+      "lucide": "satellite-dish",
+      "svg": "svg/source.svg",
+      "png": "png/source.png"
+    },
+    {
+      "slot": "forum",
+      "lucide": "message-square-text",
+      "svg": "svg/forum.svg",
+      "png": "png/forum.png"
+    },
+    {
+      "slot": "image",
+      "lucide": "image",
+      "svg": "svg/image.svg",
+      "png": "png/image.png"
+    }
+  ]
+}
