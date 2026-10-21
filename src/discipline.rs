@@ -12,8 +12,8 @@ use serenity::{
         Permissions, UserId,
     },
     builder::{
-        CreateCommand, CreateCommandOption, CreateEmbed, CreateEmbedFooter, CreateMessage,
-        EditInteractionResponse,
+        CreateCommand, CreateCommandOption, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
+        CreateMessage, EditInteractionResponse,
     },
 };
 use tracing::warn;
@@ -375,19 +375,22 @@ async fn unban(
         || " No open ban case was on record for them.".to_owned(),
         |case| format!(" Case #{case} is now closed."),
     );
+    let mut embed = CreateEmbed::new()
+        .title(format!(
+            "{}Case #{case_id} · Ban lifted",
+            config.mark("unban")
+        ))
+        .description(format!(
+            "Unbanned <@{target}>.{note}\n{}",
+            reason_line(config, reason)
+        ))
+        .colour(0x0023_A55A);
+    // Hugh holds only an ID here, so the face comes from Discord or not at all.
+    if let Some(subject) = portrait(ctx, target.get()).await {
+        embed = with_portrait(embed, &subject);
+    }
     command
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new().embed(
-                CreateEmbed::new()
-                    .title(format!(
-                        "{}Case #{case_id} · Ban lifted",
-                        config.mark("unban")
-                    ))
-                    .description(format!("Unbanned <@{target}>.{note}"))
-                    .colour(0x0023_A55A),
-            ),
-        )
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
         .await?;
     Ok(())
 }
@@ -435,24 +438,24 @@ async fn unwarn(
         .insert("standing".into(), standing_text(&standing).into());
     let case_id = incidents.report(&ctx.http, incident).await;
 
+    let mut embed = CreateEmbed::new()
+        .title(format!(
+            "{}Case #{case_id} · Case #{case} taken back",
+            config.mark("release")
+        ))
+        .description(format!(
+            "The {} on <@{}> no longer counts.\n{}\nTheir standing is now {}.",
+            record.kind.label().to_lowercase(),
+            record.user_id,
+            reason_line(config, reason),
+            standing_text(&standing)
+        ))
+        .colour(0x0023_A55A);
+    if let Some(subject) = portrait(ctx, record.user_id).await {
+        embed = with_portrait(embed, &subject);
+    }
     command
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new().embed(
-                CreateEmbed::new()
-                    .title(format!(
-                        "{}Case #{case_id} · Case #{case} taken back",
-                        config.mark("release")
-                    ))
-                    .description(format!(
-                        "The {} on <@{}> no longer counts. Their standing is now {}.",
-                        record.kind.label().to_lowercase(),
-                        record.user_id,
-                        standing_text(&standing)
-                    ))
-                    .colour(0x0023_A55A),
-            ),
-        )
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
         .await?;
     Ok(())
 }
@@ -606,6 +609,10 @@ struct Outcome {
     case_id: u64,
     kind: Punishment,
     standing: Standing,
+    /// Who it landed on, so the reply card shows their name and face.
+    subject: UserSnapshot,
+    /// The reason the moderator typed, repeated back to them.
+    reason: String,
 }
 
 /// Posts the case card, writes the record row, and reads the member's standing
@@ -626,6 +633,7 @@ async fn record_case(
         case.action,
         case.reason.to_owned(),
     );
+    let subject = case.subject.clone();
     incident.subject = Some(case.subject);
     incident.moderator = Some((&command.user).into());
     incident.channel_id = Some(command.channel_id.get());
@@ -661,6 +669,8 @@ async fn record_case(
         case_id,
         kind: case.kind,
         standing,
+        subject,
+        reason: case.reason.to_owned(),
     })
 }
 
@@ -679,7 +689,8 @@ async fn reply(
             outcome.kind.label()
         ))
         .description(format!(
-            "{summary}\nStanding is now {}.",
+            "{summary}\n{}\nStanding is now {}.",
+            reason_line(config, &outcome.reason),
             standing_text(&outcome.standing)
         ))
         .colour(band_colour(outcome.standing.band))
@@ -688,9 +699,43 @@ async fn reply(
             outcome.case_id
         )));
     command
-        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().embed(with_portrait(embed, &outcome.subject)),
+        )
         .await?;
     Ok(())
+}
+
+/// The member's name and face on a reply card, the way a case card in the mod
+/// log carries them. An account with no avatar simply keeps its name.
+fn with_portrait(embed: CreateEmbed, subject: &UserSnapshot) -> CreateEmbed {
+    let name = subject.display_name.as_ref().map_or_else(
+        || format!("@{}", subject.username),
+        |display| format!("@{} · {display}", subject.username),
+    );
+    let author = CreateEmbedAuthor::new(truncate(&name, 256));
+    if subject.avatar_url.is_empty() {
+        return embed.author(author);
+    }
+    embed
+        .author(author.icon_url(&subject.avatar_url))
+        .thumbnail(&subject.avatar_url)
+}
+
+/// The reason a moderator typed, on its own line under the summary.
+fn reason_line(config: &Config, reason: &str) -> String {
+    format!("{}**{}**", config.mark("reason"), truncate(reason, 1_500))
+}
+
+/// The face of somebody Hugh holds only an ID for. A fetch Discord refuses
+/// leaves the card without a portrait rather than failing the command.
+async fn portrait(ctx: &Context, user_id: u64) -> Option<UserSnapshot> {
+    UserId::new(user_id)
+        .to_user(&ctx.http)
+        .await
+        .ok()
+        .map(|user| (&user).into())
 }
 
 fn target_user(options: &[CommandDataOption]) -> Result<UserId> {
@@ -899,6 +944,52 @@ mod tests {
         let standing = Standing::clean(&config);
         assert_eq!(standing_text(&standing), "**100.0** / 100 (Exemplary)");
         assert_eq!(standing.band, StandingBand::Exemplary);
+    }
+
+    /// A moderator should not have to open the mod log to see who they just
+    /// acted on, or what they typed as the reason.
+    #[test]
+    fn a_reply_card_carries_the_member_and_the_reason() {
+        let config = config();
+        let subject = UserSnapshot {
+            id: 42,
+            username: "pluh".to_owned(),
+            display_name: Some("Pluh".to_owned()),
+            avatar_url: "https://cdn.discordapp.com/avatars/42/abc.png".to_owned(),
+            bot: false,
+        };
+        let embed = serde_json::to_value(with_portrait(
+            CreateEmbed::new().description(reason_line(&config, "Raid advertising")),
+            &subject,
+        ))
+        .unwrap();
+
+        assert_eq!(embed["author"]["name"].as_str().unwrap(), "@pluh · Pluh");
+        assert_eq!(
+            embed["author"]["icon_url"].as_str().unwrap(),
+            subject.avatar_url
+        );
+        assert_eq!(
+            embed["thumbnail"]["url"].as_str().unwrap(),
+            subject.avatar_url
+        );
+        assert_eq!(
+            embed["description"].as_str().unwrap(),
+            "**Raid advertising**"
+        );
+    }
+
+    /// An account with no avatar keeps its name and loses only the picture.
+    #[test]
+    fn a_faceless_account_still_names_itself() {
+        let embed = serde_json::to_value(with_portrait(
+            CreateEmbed::new(),
+            &UserSnapshot::placeholder(42),
+        ))
+        .unwrap();
+        assert_eq!(embed["author"]["name"].as_str().unwrap(), "@unknown-42");
+        assert!(embed["author"]["icon_url"].is_null());
+        assert!(embed["thumbnail"].is_null());
     }
 
     /// With no icon uploaded a case line still reads as a sentence, with no

@@ -69,6 +69,9 @@ Versioning and the Keep a Changelog format.
   author and thumbnail, Roblox headshots on Roblox lookups, one line of
   clickable references instead of three fields, and a configurable `[icons]`
   slot per label.
+- The reply a moderator gets back from `/warn`, `/kick`, `/ban`, `/unban` and
+  `/unwarn` now carries the member's name and avatar and the reason that was
+  typed, so the card they see says as much as the one in the mod log.
 - Case reports now lead with a plain-English outcome, label every piece of
   evidence, render durations and role mentions, and omit empty details.
 - Console logs are compact and target-free by default; `HUGH_LOG_FORMAT=json`
