@@ -68,18 +68,32 @@ def select(profile_name: str = "auto") -> Runtime:
     return Runtime(torch.device("cuda", index), profile, amp, description)
 
 
+def can_run(built: list[str], major: int, minor: int) -> bool:
+    """Whether a build with these architectures runs on a card of this
+    compute capability.
+
+    CUDA guarantees that machine code built for one capability runs on any
+    card of the same major version and an equal or higher minor version, so
+    the sm_60 code in today's builds runs a GTX 1050 (sm_61) even though no
+    build lists sm_61. PTX for any capability up to the card's own also runs,
+    compiled by the driver on first use."""
+    for item in built:
+        prefix, _, digits = item.partition("_")
+        if not digits.isdigit():
+            continue
+        built_major, built_minor = divmod(int(digits), 10)
+        if prefix == "sm" and built_major == major and built_minor <= minor:
+            return True
+        if prefix == "compute" and (built_major, built_minor) <= (major, minor):
+            return True
+    return False
+
+
 def _require_kernels(name: str, major: int, minor: int) -> None:
-    arch = f"sm_{major}{minor}"
     built = torch.cuda.get_arch_list()
-    # A build can also run a card through PTX compiled for an older compute
-    # capability, which the driver JIT-compiles on first use.
-    ptx = [
-        int(item.removeprefix("compute_"))
-        for item in built
-        if item.startswith("compute_") and item.removeprefix("compute_").isdigit()
-    ]
-    if arch in built or any(capability <= major * 10 + minor for capability in ptx):
+    if can_run(built, major, minor):
         return
+    arch = f"sm_{major}{minor}"
     hint = PASCAL_INSTALL if major == 6 else "install a PyTorch build that supports it"
     raise RuntimeError(
         f"this PyTorch build ({torch.__version__}, kernels for {', '.join(built)}) cannot run "
