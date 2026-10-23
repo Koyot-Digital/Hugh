@@ -10,7 +10,8 @@ moderation = "moderation.jsonl"
 mind_dir = "mind"
 
 # "auto" picks from the card: 6gb at 5 GB of VRAM or more, 3gb from 2.5 GB,
-# cpu below that. A GTX 1060 6GB lands on 6gb, the 3GB card on 3gb.
+# 2gb from 1.5 GB, cpu below that or with no usable GPU. A GTX 1060 6GB lands
+# on 6gb, the 3GB card on 3gb, and a GTX 1050 on 2gb.
 profile = "auto"
 
 # Learn from what messages say, not only their shape. With this off, text is

@@ -8,7 +8,7 @@
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
-    sync::atomic::{AtomicI64, Ordering},
+    sync::atomic::{AtomicBool, AtomicI64, Ordering},
     time::Duration,
 };
 
@@ -23,7 +23,7 @@ use serenity::{
         CreateMessage,
     },
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::{
@@ -48,7 +48,20 @@ pub struct MindClient {
     http: reqwest::Client,
     score_url: Url,
     last_warned: AtomicI64,
+    announced_untrained: AtomicBool,
 }
+
+/// The scorer is up but has not trained a model yet.
+#[derive(Debug)]
+struct NotTrained;
+
+impl std::fmt::Display for NotTrained {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Hugh Mind has not trained a model yet")
+    }
+}
+
+impl std::error::Error for NotTrained {}
 
 #[derive(Debug, Serialize)]
 struct ScoreRequest<'a> {
@@ -114,6 +127,7 @@ impl MindClient {
             http,
             score_url: base.join("score")?,
             last_warned: AtomicI64::new(0),
+            announced_untrained: AtomicBool::new(false),
         })
     }
 
@@ -134,6 +148,9 @@ impl MindClient {
             .send()
             .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            return Err(NotTrained.into());
+        }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             bail!("the scorer answered {status}: {}", truncate(&body, 200));
@@ -142,6 +159,15 @@ impl MindClient {
     }
 
     fn unreachable(&self, error: &anyhow::Error) {
+        if error.is::<NotTrained>() {
+            // Expected for the first weeks while the archive fills, so it is
+            // said once rather than warned about every five minutes.
+            if !self.announced_untrained.swap(true, Ordering::Relaxed) {
+                info!("Hugh Mind has no model yet; scoring starts once it trains one");
+            }
+            return;
+        }
+        self.announced_untrained.store(false, Ordering::Relaxed);
         let now = Utc::now().timestamp();
         let last = self.last_warned.load(Ordering::Relaxed);
         if now - last >= WARN_EVERY

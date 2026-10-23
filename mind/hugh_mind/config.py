@@ -33,8 +33,21 @@ class Profile:
 PROFILES: dict[str, Profile] = {
     "6gb": Profile("6gb", 64, 1, 16, 128, 256, False, False, True),
     "3gb": Profile("3gb", 16, 4, 8, 96, 64, True, True, False),
+    # A GTX 1050: room for the encoder and small batches, nothing to spare.
+    "2gb": Profile("2gb", 16, 4, 4, 64, 64, True, True, False),
     "cpu": Profile("cpu", 32, 1, 4, 64, 32, True, False, False),
 }
+
+
+def profile_for(total_gb: float) -> str:
+    """The profile `auto` picks for a card with this much memory."""
+    if total_gb >= 5.0:
+        return "6gb"
+    if total_gb >= 2.5:
+        return "3gb"
+    if total_gb >= 1.5:
+        return "2gb"
+    return "cpu"
 
 
 @dataclass(frozen=True)

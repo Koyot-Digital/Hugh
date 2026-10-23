@@ -1,6 +1,7 @@
 """Choosing where Hugh Mind runs, and refusing a PyTorch that cannot use the card.
 
-The home server's GTX 1060 is a Pascal card (compute capability 6.1). Pascal has
+GTX 10-series cards, such as the home server's GTX 1050, are Pascal cards
+(compute capability 6.1). Pascal has
 no tensor cores and runs half precision slowly, so it trains in fp32. Newer
 PyTorch CUDA builds no longer ship Pascal kernels at all; on such a build the
 card is visible but every kernel launch fails, so that is checked up front.
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .config import PROFILES, Profile
+from .config import PROFILES, Profile, profile_for
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def select(profile_name: str = "auto") -> Runtime:
     _require_kernels(name, major, minor)
     total_gb = torch.cuda.get_device_properties(index).total_memory / 1024**3
     if profile_name == "auto":
-        profile_name = "6gb" if total_gb >= 5.0 else "3gb" if total_gb >= 2.5 else "cpu"
+        profile_name = profile_for(total_gb)
     profile = PROFILES[profile_name]
     if profile.name == "cpu":
         return Runtime(torch.device("cpu"), profile, None, f"CPU ({name} is too small)")

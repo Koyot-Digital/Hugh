@@ -55,9 +55,9 @@ The safeguards:
 | Quick update | every 15 minutes, once 200 new messages arrive | embed new messages, fine-tune the live model with replay |
 | Nightly | 04:00 local | adapt the encoder to the server's language (masked-LM on the archive), re-embed, train from scratch, clean up |
 
-## Setting up the home server (GTX 1060)
+## Setting up the home server (GTX 10-series)
 
-The 1060 is a Pascal card (compute capability 6.1). Pascal has no tensor
+GTX 10-series cards are Pascal cards (compute capability 6.1). Pascal has no tensor
 cores and runs half precision slowly, so Hugh Mind trains it in fp32
 automatically. Newer PyTorch CUDA builds have dropped Pascal kernels
 altogether, so install from the CUDA 12.6 index:
@@ -78,6 +78,7 @@ with install instructions if the PyTorch build cannot run on the card.
 |---|---|---|
 | GTX 1060 6GB | `6gb` | batch 64; the scorer shares the GPU |
 | GTX 1060 3GB | `3gb` | batch 16 with 4× gradient accumulation; the encoder's word table is frozen during pretraining and checkpointing is on; the scorer runs on the CPU so training keeps the card |
+| GTX 1050 2GB | `2gb` | as `3gb`, with pretraining batches of 4 messages cut to 64 tokens |
 | no GPU | `cpu` | everything on the CPU, slowly |
 
 Then, in two terminals or as two services:
