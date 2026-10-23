@@ -16,5 +16,52 @@ services:
     cap_drop:
       - ALL
 
+  # Hugh Mind, on a host with an NVIDIA card and the NVIDIA Container Toolkit.
+  # Start it with `docker compose --profile mind up -d`, and point Hugh at it
+  # with [mind] endpoint = "http://mind-serve:8765" in config.toml. In
+  # mind/mind.toml set data_dir = "/app/data" and [serve] host = "0.0.0.0".
+  # The port is never published: only the Hugh container can reach it.
+  mind-serve:
+    profiles: [mind]
+    build: ./mind
+    command: [serve]
+    restart: unless-stopped
+    init: true
+    volumes:
+      - ./mind/mind.toml:/app/mind.toml:ro
+      - hugh-data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  mind-train:
+    profiles: [mind]
+    build: ./mind
+    command: [daemon]
+    restart: unless-stopped
+    init: true
+    volumes:
+      - ./mind/mind.toml:/app/mind.toml:ro
+      - hugh-data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   hugh-data:

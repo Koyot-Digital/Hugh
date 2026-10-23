@@ -6,7 +6,8 @@ use serde::Serialize;
 use serenity::{
     all::{ChannelId, Colour, Http, Timestamp, User},
     builder::{
-        CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, CreateMessage,
+        CreateActionRow, CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
+        CreateMessage,
     },
 };
 use tokio::{
@@ -137,8 +138,19 @@ impl IncidentReporter {
     pub async fn report_with(
         &self,
         http: &Http,
+        incident: Incident,
+        attached: Vec<CreateEmbed>,
+    ) -> u64 {
+        self.report_card(http, incident, attached, Vec::new()).await
+    }
+
+    /// [`Self::report_with`], with buttons beneath the card.
+    pub async fn report_card(
+        &self,
+        http: &Http,
         mut incident: Incident,
         attached: Vec<CreateEmbed>,
+        buttons: Vec<CreateActionRow>,
     ) -> u64 {
         incident.actor_id = incident.actor_id.or_else(|| {
             incident
@@ -167,7 +179,8 @@ impl IncidentReporter {
         // behind the icon slots, and its delivery ignores channel permissions.
         let message = CreateMessage::new()
             .allowed_mentions(CreateAllowedMentions::new())
-            .embeds(embeds);
+            .embeds(embeds)
+            .components(buttons);
         if let Err(error) = self.channel_id.send_message(http, message).await {
             warn!(
                 case_id = incident.case_id,

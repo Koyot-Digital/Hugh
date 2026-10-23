@@ -23,6 +23,14 @@ Discord gateway -> bot event adapter -> stateful policy -> pure detectors
 - `quarantine.rs` maintains an append-only role recovery journal.
 - `incident.rs` assigns durable case numbers, writes machine-readable records,
   and renders moderator-friendly case cards that Hugh posts itself.
+- `features.rs` turns a message into a fixed, versioned vector of numbers. It
+  is pure, like `detection.rs`.
+- `archive.rs` keeps the optional SQLite message archive behind one writer
+  thread, so the gateway never waits on the disk.
+- `message_log.rs` posts deleted and edited messages from the archive.
+
+The plan for standing v2, per-member baselines and the Hugh Mind model is in
+[roadmap.md](roadmap.md).
 
 Detector code does not call Discord. This keeps threshold behavior cheap to
 test and lets future frontends reuse the same policy. Discord API failures never
@@ -35,8 +43,9 @@ erase the incident: Hugh records an explicit failure outcome and logs the error.
    `state.rs`.
 3. Return a named violation/decision rather than enforcing inside the detector.
 4. Wire the smallest suitable gateway event in `bot.rs`.
-5. Record what was detected and whether enforcement succeeded, without storing
-   message content or secrets.
+5. Record what was detected and whether enforcement succeeded, without putting
+   message content or secrets in the case. Message text belongs in the archive
+   alone; flag the message there with `Archive::flag` so it is kept as evidence.
 6. Add boundary tests: exactly at the limit, one over it, expiry, trusted
    bypass, and disabled behavior.
 7. Document permissions, false-positive risks, and recovery.

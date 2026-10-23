@@ -221,6 +221,46 @@ skip_bots = true
 # channel into the raid.
 skip_during_raid = true
 
+# The message archive: every message's text, edits and deletion, kept in one
+# SQLite file as evidence and as history for Hugh Mind. It stores what members
+# write, so read docs/security.md before turning it on.
+[archive]
+enabled = true
+path = "data/archive.sqlite3"
+# Days the text of a message no case refers to is kept. Zero keeps it until the
+# ceiling below forces the oldest out. Automod evidence is never dropped.
+retention_days = 0
+# 5,000 messages a day comes to roughly a third of a gigabyte a year.
+max_gigabytes = 30.0
+include_bots = false
+
+# Deleted and edited messages, posted with the text the archive kept. Needs
+# [archive]. Hugh needs View Channel, Send Messages, Embed Links and Attach
+# Files in the channel.
+[message_log]
+enabled = false
+# channel_id = "123456789012345683"
+log_edits = true
+log_deletes = true
+# Channels never copied into the log, such as private staff channels.
+ignored_channel_ids = []
+
+# Hugh Mind: the model trained on this server's history (see mind/README.md).
+# Needs [archive]. Hugh scores each new message after the rules have run, on a
+# task of its own, so a slow or stopped scorer never delays enforcement.
+[mind]
+enabled = false
+endpoint = "http://127.0.0.1:8765"
+# "shadow" scores silently; "review" also posts a card for a message the rules
+# let through that the model thinks needs action. The model never acts alone.
+mode = "shadow"
+# Calibrated probability at which a message is put in front of staff.
+review_threshold = 0.9
+# review_channel_id = "123456789012345684"   # defaults to incident_channel_id
+request_timeout_ms = 2000
+# ✅ and ❌ on automod case cards, so staff verdicts on the rules teach it too.
+feedback_buttons = true
+
 # Who /lock silences. With no roles listed it falls back to @everyone, which is
 # what a lock means in a server that has not split its roles up.
 [lock]
@@ -281,6 +321,8 @@ owner_user_ids = []
 
 # Required tier per command. Omitted commands keep the default shown here.
 [permissions.commands]
+# Who may press ✅ and ❌ on case and review cards to teach Hugh Mind.
+feedback = "helper"
 help = "everyone"
 hugh = "everyone"
 check = "moderator"
@@ -289,6 +331,8 @@ unlock = "moderator"
 banish = "moderator"
 unbanish = "moderator"
 warn = "moderator"
+mute = "moderator"
+unmute = "moderator"
 kick = "moderator"
 ban = "admin"
 unban = "admin"

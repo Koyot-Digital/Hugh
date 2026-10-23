@@ -15,10 +15,11 @@ use serenity::{
 use tracing::{error, info};
 
 use crate::{
+    archive::Archive,
     config::{AccessLevel, Config, DiscordPowers},
     discipline,
     incident::{Incident, IncidentReporter},
-    lookup,
+    lookup, mind,
     moderation::ModerationStore,
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
@@ -47,7 +48,9 @@ fn discord_gate(command: &str) -> Option<Permissions> {
     match command {
         "lock" | "unlock" => Some(Permissions::MANAGE_CHANNELS),
         "banish" | "unbanish" => Some(Permissions::MANAGE_ROLES | Permissions::MODERATE_MEMBERS),
-        "check" | "modlogs" | "standing" | "warn" | "unwarn" => Some(Permissions::MODERATE_MEMBERS),
+        "check" | "modlogs" | "standing" | "warn" | "unwarn" | "mute" | "unmute" => {
+            Some(Permissions::MODERATE_MEMBERS)
+        }
         "kick" => Some(Permissions::KICK_MEMBERS),
         "ban" | "unban" => Some(Permissions::BAN_MEMBERS),
         // A bulk export of member content is an owner's tool, so without
@@ -178,6 +181,7 @@ pub struct Services<'a> {
     pub incidents: &'a IncidentReporter,
     pub rotector: Option<&'a RotectorClient>,
     pub moderation: &'a ModerationStore,
+    pub archive: Option<&'a Archive>,
 }
 
 pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services<'_>) {
@@ -188,11 +192,12 @@ pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services
         incidents,
         rotector,
         moderation,
+        archive,
     } = services;
     let command = match interaction {
         Interaction::Command(command) => command,
         Interaction::Component(component) => {
-            component_pressed(ctx, &component, config, incidents).await;
+            component_pressed(ctx, &component, config, incidents, archive).await;
             return;
         }
         _ => return,
@@ -216,9 +221,8 @@ pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services
         "unbanish" => unbanish(ctx, &command, config, store, resources, incidents).await,
         "check" => lookup::handle(ctx, &command, config, rotector, incidents).await,
         "scrape" => scrape::handle(ctx, &command, config, incidents).await,
-        "warn" | "kick" | "ban" | "unban" | "unwarn" | "modlogs" | "standing" => {
-            discipline::handle(ctx, &command, config, moderation, incidents).await
-        }
+        "warn" | "mute" | "unmute" | "kick" | "ban" | "unban" | "unwarn" | "modlogs"
+        | "standing" => discipline::handle(ctx, &command, config, moderation, incidents).await,
         "help" => help(ctx, &command, config).await,
         "hugh" => about(ctx, &command).await,
         _ => Ok(()),
@@ -587,6 +591,8 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
             "Members",
             format!(
                 "`/warn user reason` — record a warning ({})\n\
+                 `/mute user length [reason]` — time them out for up to 28 days ({})\n\
+                 `/unmute user [reason]` — lift a timeout early ({})\n\
                  `/kick user [reason]` — remove them from the server ({})\n\
                  `/ban user [reason] [length] [delete_days]` — ban, permanently or for a length \
                  such as `1h30m` or `7d` ({})\n\
@@ -594,6 +600,8 @@ async fn help(ctx: &Context, command: &CommandInteraction, config: &Config) -> R
                  `/banish user [reason]` — isolate a member and save their roles ({})\n\
                  `/unbanish user [reason]` — restore their roles ({})",
                 level("warn"),
+                level("mute"),
+                level("unmute"),
                 level("kick"),
                 level("ban"),
                 level("unban"),
@@ -730,19 +738,38 @@ fn merged_overwrite(
     PermissionOverwrite { allow, deny, kind }
 }
 
-/// Routes a pressed button. Only `/check`'s pin button exists today; anything
-/// else is ignored so a stale card cannot drive Hugh.
+/// Routes a pressed button: `/check`'s pin button and Hugh Mind's ✅ and ❌.
+/// Anything else is ignored so a stale card cannot drive Hugh.
 async fn component_pressed(
     ctx: &Context,
     component: &ComponentInteraction,
     config: &Config,
     incidents: &IncidentReporter,
+    archive: Option<&Archive>,
 ) {
     if component
         .guild_id
         .is_none_or(|guild| guild.get() != config.guild_id)
-        || !lookup::is_pin_button(&component.data.custom_id)
     {
+        return;
+    }
+    if mind::is_feedback_button(&component.data.custom_id) {
+        if let Err(error) = mind::handle_feedback(ctx, component, config, archive).await {
+            error!(?error, "failed to keep a Hugh Mind verdict");
+            let _ = component
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!("Hugh could not keep that verdict: {error}"))
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+        }
+        return;
+    }
+    if !lookup::is_pin_button(&component.data.custom_id) {
         return;
     }
     if let Err(error) = lookup::handle_pin(ctx, component, config, incidents).await {

@@ -1,0 +1,66 @@
+# Hugh Mind: the trainer and scorer. Copy to mind.toml beside this file.
+# Relative paths are resolved from this file's folder, then from data_dir.
+
+# Hugh's own data directory: the archive, the case log and the record.
+data_dir = "../data"
+archive = "archive.sqlite3"
+incidents = "incidents.jsonl"
+moderation = "moderation.jsonl"
+# Embeddings and every trained model live here, inside data_dir.
+mind_dir = "mind"
+
+# "auto" picks from the card: 6gb at 5 GB of VRAM or more, 3gb from 2.5 GB,
+# cpu below that. A GTX 1060 6GB lands on 6gb, the 3GB card on 3gb.
+profile = "auto"
+
+# Learn from what messages say, not only their shape. With this off, text is
+# never read and the model trains on the 22 features alone.
+train_on_content = true
+
+[encoder]
+# Downloaded once from Hugging Face and cached under data/mind/hf-cache when
+# run in Docker. Any BERT-style encoder works; this one is multilingual.
+base = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+max_length = 128
+
+[model]
+history = 32      # the author's own recent messages the model reads
+channel = 16      # the channel's recent messages, from anyone
+d_model = 256
+layers = 4
+heads = 4
+author_dim = 64   # numbers per regular member
+dropout = 0.1
+
+[training]
+epochs = 4
+incremental_epochs = 1
+learning_rate = 3e-4
+incremental_learning_rate = 1e-4
+# Members need this many messages before the model learns them personally.
+min_author_messages = 200
+settle_hours = 24.0
+action_window_minutes = 10.0
+negatives_per_positive = 50
+replay_fraction = 0.3
+holdout_fraction = 0.1
+# The review threshold Hugh Mind reports is the lowest score at which flagged
+# messages were right this often in the held-out period.
+target_precision = 0.9
+keep_versions = 50
+
+[pretrain]
+max_texts = 200000
+min_new_texts = 5000
+
+[schedule]
+incremental_minutes = 15
+nightly_hour = 4
+min_new_messages = 200
+
+[serve]
+# 127.0.0.1 when Hugh runs on the same host. In Docker, use 0.0.0.0 and keep
+# the port off the host network: only the Hugh container needs to reach it.
+host = "127.0.0.1"
+port = 8765
+reload_seconds = 30

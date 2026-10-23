@@ -7,6 +7,54 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
+- **Hugh Mind** (`mind/`), a model trained on the server's own history.
+  - **What it reads**: each message, the author's last 32 messages and the
+    channel's last 16, all through one transformer. A learned embedding per
+    regular member is how it knows one member's capitals are normal and
+    another's are not.
+  - **What it learns from**:
+    - automod cases that stood (positives)
+    - cases staff took back with `/unwarn` (strong negatives)
+    - moderator actions (weak positives for the messages before them)
+    - ✅/❌ verdicts (triple weight)
+    - settled clean messages (negatives)
+  - **Unusual for this person**: a self-supervised next-message task scores
+    how out of character each message is for its author.
+  - **Safeguards**:
+    - models are judged on a held-out future period
+    - scores are calibrated
+    - a new model is promoted only if it matches or beats the live one
+    - the quarter-hourly updates replay older data
+    - the encoder is adapted to the server's language every night
+  - **Hardware**: runs on a GTX 1060 in fp32, with 6 GB and 3 GB profiles, and
+    rejects a PyTorch build that lacks Pascal kernels.
+- `[mind]` in Hugh: every new message is scored after the rules have run,
+  without holding up enforcement. `mode = "review"` posts a review card when
+  the model is confident the rules missed something, saying why and linking
+  the context it weighed. Automod case cards gain ✅ Right call / ❌ False
+  positive buttons; who may press them is set by the new `feedback`
+  permission. Scores and verdicts are kept in the archive, and a verdict keeps
+  its message's text through retention.
+- `mind-serve` and `mind-train` services in `docker-compose.yml` under the
+  `mind` profile, with GPU reservations, and a CI job for the trainer's tests.
+- `/mute user length [reason]` and `/unmute user [reason]`, working through
+  Discord's own timeout rather than a muted role. A mute must end, at most 28
+  days out, and is filed as a timeout case against standing; `/unmute` lifts it
+  early and files its own case.
+- An optional **message archive** (`[archive]`): every message's text, the
+  text each edit replaced, and when it was deleted, in one SQLite file written
+  by a background thread so the gateway never waits on the disk. Automod
+  removals are kept as evidence. `retention_days` and `max_gigabytes` drop the
+  oldest unreferenced text first. Off by default.
+- A **message log** (`[message_log]`) that posts deleted messages with their
+  text, and edited ones beside what they said before. A purge arrives as one
+  card with a transcript attached.
+- A per-message feature vector (length, caps share, emoji, links, gap since the
+  member's last message, and more), stored with each archived message as the
+  groundwork for per-member baselines and Hugh Mind.
+- `docs/roadmap.md`: the plan for standing v2, live per-member baselines, and
+  the Hugh Mind model.
+
 - A durable moderation record behind `/warn`, `/kick`, `/ban`, `/unban`,
   `/unwarn`, `/modlogs` and `/standing`. Warnings, timeouts, kicks, bans and
   automod hits are all filed as numbered cases, `/ban` accepts a length such as

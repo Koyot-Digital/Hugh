@@ -4,3 +4,7 @@
 /data/
 *.log
 
+/mind/mind.toml
+/mind/.venv/
+__pycache__/
+*.egg-info/

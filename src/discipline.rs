@@ -1,19 +1,20 @@
-//! The moderator's own tools: `/warn`, `/kick`, `/ban`, `/unban`, `/unwarn`,
-//! `/modlogs` and `/standing`.
+//! The moderator's own tools: `/warn`, `/mute`, `/unmute`, `/kick`, `/ban`,
+//! `/unban`, `/unwarn`, `/modlogs` and `/standing`.
 //!
 //! Every one of them writes a case card to the mod log and a row to the
 //! moderation record, so one case number covers what happened, why, who did
 //! it, and what it cost the member's standing.
 
 use anyhow::{Context as _, Result, bail};
+use chrono::Utc;
 use serenity::{
     all::{
         CommandDataOption, CommandInteraction, CommandOptionType, Context, GuildId, Member,
-        Permissions, UserId,
+        Permissions, Timestamp, UserId,
     },
     builder::{
         CreateCommand, CreateCommandOption, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
-        CreateMessage, EditInteractionResponse,
+        CreateMessage, EditInteractionResponse, EditMember,
     },
 };
 use tracing::warn;
@@ -29,18 +30,22 @@ use crate::{
 const AUDIT_LIMIT: usize = 440;
 /// Width of the standing bar on a `/standing` card.
 const BAR_SEGMENTS: usize = 20;
+/// Discord refuses a timeout that ends more than 28 days from now.
+const MAX_TIMEOUT_SECONDS: u64 = 28 * 86_400;
+
+fn reason(description: &str, required: bool) -> CreateCommandOption {
+    CreateCommandOption::new(CommandOptionType::String, "reason", description)
+        .min_length(1)
+        .max_length(512)
+        .required(required)
+}
+
+fn target(description: &str) -> CreateCommandOption {
+    CreateCommandOption::new(CommandOptionType::User, "user", description).required(true)
+}
 
 pub fn commands() -> Vec<(&'static str, CreateCommand)> {
-    let reason = |description: &str, required: bool| {
-        CreateCommandOption::new(CommandOptionType::String, "reason", description)
-            .min_length(1)
-            .max_length(512)
-            .required(required)
-    };
-    let target = |description: &str| {
-        CreateCommandOption::new(CommandOptionType::User, "user", description).required(true)
-    };
-    vec![
+    let mut commands = vec![
         (
             "warn",
             CreateCommand::new("warn")
@@ -127,6 +132,39 @@ pub fn commands() -> Vec<(&'static str, CreateCommand)> {
                     "Member to look up; defaults to you",
                 )),
         ),
+    ];
+    commands.extend(timeout_commands());
+    commands
+}
+
+/// `/mute` and `/unmute`, which work through Discord's own timeout rather than
+/// a muted role, so nothing has to be kept in step with channel permissions.
+fn timeout_commands() -> [(&'static str, CreateCommand); 2] {
+    [
+        (
+            "mute",
+            CreateCommand::new("mute")
+                .description("Time a member out so they cannot talk, for up to 28 days")
+                .add_option(target("Member to mute"))
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "length",
+                        "How long, such as 10m, 2h or 3d. Up to 28 days",
+                    )
+                    .required(true)
+                    .min_length(1)
+                    .max_length(32),
+                )
+                .add_option(reason("Why they are being muted", false)),
+        ),
+        (
+            "unmute",
+            CreateCommand::new("unmute")
+                .description("Lift a member's timeout before it runs out")
+                .add_option(target("Member to unmute"))
+                .add_option(reason("Why the timeout is being lifted", false)),
+        ),
     ]
 }
 
@@ -142,6 +180,8 @@ pub async fn handle(
     }
     match command.data.name.as_str() {
         "warn" => warn_member(ctx, command, config, store, incidents).await,
+        "mute" => mute(ctx, command, config, store, incidents).await,
+        "unmute" => unmute(ctx, command, config, incidents).await,
         "kick" => kick(ctx, command, config, store, incidents).await,
         "ban" => ban(ctx, command, config, store, incidents).await,
         "unban" => unban(ctx, command, config, store, incidents).await,
@@ -189,6 +229,158 @@ async fn warn_member(
         format!("Warned <@{target}>."),
     )
     .await
+}
+
+async fn mute(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let target = target_user(&command.data.options)?;
+    let member = actionable(ctx, command, config, target).await?;
+    let member = member.context("that member is not in this server")?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("No reason given");
+    let length = option_string(&command.data.options, "length").context("missing length option")?;
+    let seconds = mute_length(length)?;
+    let until_unix = Utc::now()
+        .timestamp()
+        .saturating_add(i64::try_from(seconds)?);
+    let until = Timestamp::from_unix_timestamp(until_unix)
+        .context("that length does not land on a date Discord accepts")?;
+
+    let audit = audit_reason(command, reason);
+    guild_id
+        .edit_member(
+            &ctx.http,
+            target,
+            EditMember::new()
+                .disable_communication_until_datetime(until)
+                .audit_log_reason(&audit),
+        )
+        .await
+        .context(
+            "Discord refused the timeout; check Hugh's Moderate Members permission and role \
+             order, and that the member is not an administrator",
+        )?;
+    // Unlike a kick, the member is still here afterwards, so the DM can wait
+    // until the timeout has actually landed.
+    notify(ctx, config, target, "timed out in", reason, Some(seconds)).await;
+
+    let outcome = record_case(
+        ctx,
+        command,
+        config,
+        store,
+        incidents,
+        Case {
+            kind: Punishment::Timeout,
+            subject: (&member.user).into(),
+            action: "member_timed_out",
+            reason,
+            duration_seconds: Some(seconds),
+        },
+    )
+    .await?;
+    reply(
+        ctx,
+        command,
+        config,
+        &outcome,
+        format!(
+            "Muted <@{target}> for {}. Discord lifts it <t:{until_unix}:R>.",
+            crate::incident::human_duration(seconds)
+        ),
+    )
+    .await
+}
+
+/// Lifting a timeout costs the member nothing and takes nothing back: the case
+/// that muted them stays on record, the same way `/unban` leaves the ban case.
+async fn unmute(
+    ctx: &Context,
+    command: &CommandInteraction,
+    config: &Config,
+    incidents: &IncidentReporter,
+) -> Result<()> {
+    command.defer_ephemeral(&ctx.http).await?;
+    let guild_id = command.guild_id.context("this command is server-only")?;
+    let target = target_user(&command.data.options)?;
+    let member = actionable(ctx, command, config, target).await?;
+    let member = member.context("that member is not in this server")?;
+    let reason = option_string(&command.data.options, "reason").unwrap_or("No reason given");
+    let now = Utc::now().timestamp();
+    if member
+        .communication_disabled_until
+        .is_none_or(|until| until.unix_timestamp() <= now)
+    {
+        bail!("<@{target}> is not timed out");
+    }
+
+    let audit = audit_reason(command, reason);
+    guild_id
+        .edit_member(
+            &ctx.http,
+            target,
+            EditMember::new()
+                .enable_communication()
+                .audit_log_reason(&audit),
+        )
+        .await
+        .context(
+            "Discord refused to lift the timeout; check Hugh's Moderate Members permission and \
+             role order",
+        )?;
+
+    let subject: UserSnapshot = (&member.user).into();
+    let mut incident = Incident::new(
+        "member_unmute",
+        config.guild_id,
+        "member_unmuted",
+        reason.to_owned(),
+    );
+    incident.subject = Some(subject.clone());
+    incident.moderator = Some((&command.user).into());
+    incident.channel_id = Some(command.channel_id.get());
+    incident
+        .details
+        .insert("target_user_id".into(), target.get().into());
+    let case_id = incidents.report(&ctx.http, incident).await;
+
+    let embed = CreateEmbed::new()
+        .title(format!(
+            "{}Case #{case_id} · Timeout lifted",
+            config.mark("release")
+        ))
+        .description(format!(
+            "<@{target}> can talk again.\n{}",
+            reason_line(config, reason)
+        ))
+        .colour(0x0023_A55A);
+    command
+        .edit_response(
+            &ctx.http,
+            EditInteractionResponse::new().embed(with_portrait(embed, &subject)),
+        )
+        .await?;
+    Ok(())
+}
+
+/// A moderator's `/mute` length, held to what a Discord timeout can be.
+fn mute_length(input: &str) -> Result<u64> {
+    let Some(seconds) = parse_duration(input)? else {
+        bail!(
+            "a mute has to end; give a length such as 10m, 2h or 3d, or use /ban to remove \
+             somebody for good"
+        );
+    };
+    if seconds > MAX_TIMEOUT_SECONDS {
+        bail!("Discord caps a timeout at 28 days; use /ban for anything longer");
+    }
+    Ok(seconds)
 }
 
 async fn kick(
@@ -904,7 +1096,7 @@ const fn band_colour(band: StandingBand) -> u32 {
     }
 }
 
-fn truncate(value: &str, maximum: usize) -> String {
+pub fn truncate(value: &str, maximum: usize) -> String {
     if value.chars().count() <= maximum {
         return value.to_owned();
     }
@@ -936,6 +1128,17 @@ mod tests {
         // Nonsense input cannot produce a bar of the wrong width.
         assert_eq!(standing_bar(-1.0).len(), BAR_SEGMENTS);
         assert_eq!(standing_bar(9.0).len(), BAR_SEGMENTS);
+    }
+
+    /// A timeout always ends, and Discord ends it no later than 28 days out.
+    #[test]
+    fn a_mute_must_end_within_discords_ceiling() {
+        assert_eq!(mute_length("10m").unwrap(), 600);
+        assert_eq!(mute_length("4w").unwrap(), MAX_TIMEOUT_SECONDS);
+        assert!(mute_length("4w1s").is_err());
+        assert!(mute_length("perm").is_err());
+        assert!(mute_length("").is_err());
+        assert!(mute_length("ten minutes").is_err());
     }
 
     #[test]

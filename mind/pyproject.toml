@@ -1,0 +1,29 @@
+[project]
+name = "hugh-mind"
+version = "0.1.0"
+description = "The model Hugh trains on its own server's history, and the scorer Hugh calls"
+requires-python = ">=3.11"
+license = "MIT"
+# torch is deliberately not pinned to a CUDA build here: install it first from
+# the index that matches the card (see README.md), then install this package.
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.44",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+hugh-mind = "hugh_mind.__main__:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hugh_mind*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

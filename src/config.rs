@@ -49,6 +49,12 @@ pub struct Config {
     #[serde(default)]
     pub welcome: WelcomeConfig,
     #[serde(default)]
+    pub archive: ArchiveConfig,
+    #[serde(default)]
+    pub message_log: MessageLogConfig,
+    #[serde(default)]
+    pub mind: MindConfig,
+    #[serde(default)]
     pub lock: LockConfig,
     #[serde(default)]
     pub quarantine: QuarantineConfig,
@@ -661,6 +667,108 @@ impl Default for WelcomeConfig {
     }
 }
 
+/// What Hugh does with a Hugh Mind score.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MindMode {
+    /// Score every message and keep the score, but show staff nothing.
+    Shadow,
+    /// Also post a review card for a message the rules let through that the
+    /// model thinks needs action.
+    Review,
+}
+
+/// Hugh Mind: the model trained on this server's history, reached through the
+/// scorer `python -m hugh_mind serve` runs beside Hugh.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MindConfig {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub mode: MindMode,
+    /// Calibrated probability of needing action at which a message is put in
+    /// front of staff.
+    pub review_threshold: f64,
+    /// Where review cards go. Defaults to `incident_channel_id`.
+    #[serde(deserialize_with = "optional_snowflake")]
+    pub review_channel_id: Option<u64>,
+    pub request_timeout_ms: u64,
+    /// ✅ and ❌ on every automod case card, so staff verdicts on the rules
+    /// become training labels too.
+    pub feedback_buttons: bool,
+}
+
+impl Default for MindConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:8765".to_owned(),
+            mode: MindMode::Shadow,
+            review_threshold: 0.9,
+            review_channel_id: None,
+            request_timeout_ms: 2_000,
+            feedback_buttons: true,
+        }
+    }
+}
+
+/// The message archive: every message in the guild, its edits and when it was
+/// deleted, kept as evidence for staff and as history for Hugh Mind.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchiveConfig {
+    pub enabled: bool,
+    pub path: String,
+    /// Days the text of a message no case refers to is kept. Zero keeps it for
+    /// as long as the archive has room. Features and timestamps always stay.
+    pub retention_days: u32,
+    /// Ceiling on the archive, in gigabytes. Past it, the oldest text that no
+    /// case refers to is dropped first.
+    pub max_gigabytes: f64,
+    /// Archive bots and webhooks as well as people.
+    pub include_bots: bool,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "data/archive.sqlite3".to_owned(),
+            retention_days: 0,
+            max_gigabytes: 30.0,
+            include_bots: false,
+        }
+    }
+}
+
+/// Deleted and edited messages, posted to a staff channel with the text the
+/// archive kept.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MessageLogConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "optional_snowflake")]
+    pub channel_id: Option<u64>,
+    pub log_edits: bool,
+    pub log_deletes: bool,
+    /// Channels whose edits and deletions are never posted, such as staff
+    /// channels that would otherwise be copied somewhere less private.
+    #[serde(deserialize_with = "snowflakes")]
+    pub ignored_channel_ids: HashSet<u64>,
+}
+
+impl Default for MessageLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: None,
+            log_edits: true,
+            log_deletes: true,
+            ignored_channel_ids: HashSet::new(),
+        }
+    }
+}
+
 /// Who `/lock` silences. With no roles listed it falls back to `@everyone`,
 /// which is what a lock means in a server that has not split its roles up.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -841,7 +949,10 @@ fn is_emoji_shortcode(value: &str) -> bool {
 }
 
 /// Commands Hugh knows about, with the tier each one needs by default.
-pub const COMMAND_LEVELS: [(&str, AccessLevel); 15] = [
+/// `feedback` is not a slash command: it is who may press ✅ and ❌ on case and
+/// review cards to teach Hugh Mind.
+pub const COMMAND_LEVELS: [(&str, AccessLevel); 18] = [
+    ("feedback", AccessLevel::Helper),
     ("help", AccessLevel::Everyone),
     ("hugh", AccessLevel::Everyone),
     ("check", AccessLevel::Moderator),
@@ -850,6 +961,8 @@ pub const COMMAND_LEVELS: [(&str, AccessLevel); 15] = [
     ("banish", AccessLevel::Moderator),
     ("unbanish", AccessLevel::Moderator),
     ("warn", AccessLevel::Moderator),
+    ("mute", AccessLevel::Moderator),
+    ("unmute", AccessLevel::Moderator),
     ("kick", AccessLevel::Moderator),
     ("ban", AccessLevel::Admin),
     ("unban", AccessLevel::Admin),
@@ -1047,6 +1160,8 @@ impl Config {
         self.validate_standing()?;
         self.validate_moderation()?;
         self.validate_welcome()?;
+        self.validate_archive()?;
+        self.validate_mind()?;
         self.validate_permissions()?;
         self.validate_icons()?;
         Ok(())
@@ -1171,6 +1286,60 @@ impl Config {
         let message = self.welcome.message.trim();
         if message.is_empty() || message.chars().count() > 1_800 {
             bail!("welcome.message must contain 1 to 1800 characters");
+        }
+        Ok(())
+    }
+
+    fn validate_archive(&self) -> Result<()> {
+        if self.archive.enabled {
+            if self.archive.path.trim().is_empty() {
+                bail!("archive.path must not be empty");
+            }
+            if !self.archive.max_gigabytes.is_finite() || self.archive.max_gigabytes <= 0.0 {
+                bail!("archive.max_gigabytes must be above zero");
+            }
+        }
+        if !self.message_log.enabled {
+            return Ok(());
+        }
+        if !self.archive.enabled {
+            bail!(
+                "message_log needs [archive] enabled: Discord does not say what a deleted message \
+                 said, so the log can only show what the archive kept"
+            );
+        }
+        match self.message_log.channel_id {
+            None => bail!("message_log is enabled but message_log.channel_id is not set"),
+            Some(0) => bail!("message_log.channel_id must be a non-zero Discord ID"),
+            Some(_) => {}
+        }
+        Ok(())
+    }
+
+    fn validate_mind(&self) -> Result<()> {
+        let mind = &self.mind;
+        if !mind.enabled {
+            return Ok(());
+        }
+        if !self.archive.enabled {
+            bail!(
+                "mind needs [archive] enabled: the scorer reads each message's context from it, \
+                 and staff verdicts are kept in it"
+            );
+        }
+        let endpoint = Url::parse(mind.endpoint.trim())
+            .context("mind.endpoint must be a URL, such as http://127.0.0.1:8765")?;
+        if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
+            bail!("mind.endpoint must be an http or https URL with a host");
+        }
+        if !(mind.review_threshold > 0.0 && mind.review_threshold < 1.0) {
+            bail!("mind.review_threshold must be between 0 and 1");
+        }
+        if !(100..=30_000).contains(&mind.request_timeout_ms) {
+            bail!("mind.request_timeout_ms must be between 100 and 30000");
+        }
+        if mind.review_channel_id == Some(0) {
+            bail!("mind.review_channel_id must be a non-zero Discord ID");
         }
         Ok(())
     }

@@ -1,10 +1,14 @@
+mod archive;
 mod bot;
 mod commands;
 mod config;
 mod detection;
 mod discipline;
+mod features;
 mod incident;
 mod lookup;
+mod message_log;
+mod mind;
 mod moderation;
 mod quarantine;
 mod rotector;
@@ -24,9 +28,11 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
+    archive::Archive,
     bot::Handler,
     config::Config,
     incident::{IncidentReporter, IncidentSink},
+    mind::MindClient,
     moderation::ModerationStore,
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
@@ -96,6 +102,7 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let (archive, mind) = learning(&config)?;
     let handler = Handler::new(
         Arc::clone(&config),
         Arc::new(SecurityState::new(&config)),
@@ -104,7 +111,9 @@ async fn main() -> Result<()> {
         QuarantineManager::new(),
         rotector,
         moderation.clone(),
-    );
+    )
+    .with_archive(archive)
+    .with_mind(mind);
 
     let intents = GatewayIntents::GUILDS
         | GatewayIntents::GUILD_MEMBERS
@@ -143,6 +152,33 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The message archive and the Hugh Mind client, each when configured.
+/// Validation guarantees Hugh Mind never runs without the archive.
+fn learning(config: &Config) -> Result<(Option<Archive>, Option<Arc<MindClient>>)> {
+    let archive = if config.archive.enabled {
+        let archive = Archive::open(&config.archive)?;
+        info!(
+            path = config.archive.path,
+            retention_days = config.archive.retention_days,
+            "the message archive is open"
+        );
+        Some(archive)
+    } else {
+        None
+    };
+    let mind = if config.mind.enabled {
+        info!(
+            endpoint = config.mind.endpoint,
+            mode = ?config.mind.mode,
+            "Hugh Mind scores every new message"
+        );
+        Some(Arc::new(MindClient::new(&config.mind)?))
+    } else {
+        None
+    };
+    Ok((archive, mind))
 }
 
 async fn shutdown_signal() -> Result<()> {

@@ -178,8 +178,8 @@ stays there. Scaled timeouts are clamped to Discord's 28-day ceiling.
 
 ## `[moderation]`
 
-The record behind `/warn`, `/kick`, `/ban`, `/unban`, `/unwarn`, `/modlogs` and
-`/standing`.
+The record behind `/warn`, `/mute`, `/unmute`, `/kick`, `/ban`, `/unban`,
+`/unwarn`, `/modlogs` and `/standing`.
 
 - `enabled`: registers those commands. The record itself is always kept, because
   standing and escalation are built on it.
@@ -209,6 +209,81 @@ has already dropped is not retried on every sweep from then on.
   turn the welcome channel into the raid.
 
 Nobody Hugh has just removed on arrival is welcomed.
+
+## `[archive]`
+
+The message archive: every message in the guild, the text each edit replaced,
+and when each was deleted, kept in one SQLite file. It is the evidence behind
+the message log and the history Hugh Mind will train on (see
+[roadmap.md](roadmap.md)). Off by default, because it stores what members
+write; read [security.md](security.md#message-archive) before turning it on.
+
+- `enabled`: keep the archive. Default: `false`.
+- `path`: the database file. Default: `data/archive.sqlite3`.
+- `retention_days`: days the text of a message that no case refers to is kept.
+  Zero keeps it for as long as the archive has room. Each message's features,
+  timestamps and IDs stay either way, and so does any message Hugh's automod
+  removed.
+- `max_gigabytes`: ceiling on the archive. Past it, Hugh drops the oldest text
+  that no case refers to, hourly, until the archive is back under. Default:
+  `30.0`. At 5,000 messages a day the archive grows by roughly a third of a
+  gigabyte a year.
+- `include_bots`: archive bots and webhooks as well as people. Default: `false`.
+
+Everyone is archived, `trusted_user_ids` and `trusted_role_ids` included: the
+trust lists exempt members from automod, not from the record.
+
+## `[message_log]`
+
+Deleted and edited messages, posted to a staff channel. Discord does not say
+what a deleted message said, so this needs `[archive]` enabled and can only show
+messages sent after the archive was turned on.
+
+- `enabled` and `channel_id`: the log and where it goes. Hugh needs View
+  Channel, Send Messages, Embed Links and Attach Files there.
+- `log_edits`, `log_deletes`: which events are posted. Both default to `true`.
+- `ignored_channel_ids`: channels whose edits and deletions are never posted,
+  such as staff channels that would otherwise be copied somewhere less private.
+
+One deleted message gets a card with its text, its attachments' file names and
+when it was sent. A bulk deletion, such as a purge, gets a single card naming
+the authors with a transcript attached, so it cannot flood the log. A message
+Hugh's automod removed says so, with its case number when the case was filed
+before Discord reported the deletion. Mentions in logged text never ping.
+
+## `[mind]`
+
+Hugh Mind, the model trained on this server's own history. It runs as a
+separate service, `python -m hugh_mind serve`, set up as described in
+[mind/README.md](../mind/README.md). Hugh sends it each new message once the
+rules have run, on a task of its own, so a slow or stopped scorer never delays
+enforcement and is logged at most once every five minutes. Needs `[archive]`.
+
+- `enabled`: score messages. Default: `false`.
+- `endpoint`: where the scorer listens. Default: `http://127.0.0.1:8765`.
+- `mode`:
+  - `shadow` (the default) scores every message and keeps the score in the
+    archive, but shows staff nothing.
+  - `review` also posts a review card for a message the rules let through when
+    the model is at least `review_threshold` sure it needs action.
+  The model never deletes, mutes or bans anyone on its own.
+- `review_threshold`: calibrated probability, between 0 and 1. Default: `0.9`.
+  `python -m hugh_mind status` reports the threshold at which held-out
+  messages were right 90% of the time, which is a good value to start from.
+- `review_channel_id`: where review cards go. Defaults to
+  `incident_channel_id`.
+- `request_timeout_ms`: how long Hugh waits for a score, from 100 to 30000.
+  Default: `2000`.
+- `feedback_buttons`: put ✅ and ❌ on automod case cards. Default: `true`.
+
+A review card quotes the message and says why it was flagged: the probability,
+the category behind it, and whether the message is out of character for its
+author. It links to the earlier messages the model weighed most. Its ✅ and ❌
+buttons, like those on case cards, record a staff verdict that the next
+training run learns from at triple weight. Who may press them is the
+`feedback` entry in `[permissions.commands]`, `helper` by default. A verdict
+also keeps that message's text through retention, because it is training
+data.
 
 ## `[lock]`
 
@@ -466,10 +541,11 @@ anyone in `trusted_user_ids` counts as `owner`.
 | Command | Default tier |
 | --- | --- |
 | `/help`, `/hugh` | `everyone` |
+| ✅ and ❌ on case and review cards (`feedback`) | `helper` |
 | `/modlogs`, `/standing` | `helper` |
 | `/check` | `moderator` |
 | `/lock`, `/unlock`, `/banish`, `/unbanish` | `moderator` |
-| `/warn`, `/kick` | `moderator` |
+| `/warn`, `/mute`, `/unmute`, `/kick` | `moderator` |
 | `/ban`, `/unban`, `/unwarn` | `admin` |
 | `/scrape` | `owner` |
 
@@ -498,6 +574,13 @@ optional elsewhere. Members in `trusted_user_ids` may always use them.
 
 Nobody can act on a member at or above their own tier, so a moderator cannot
 warn, kick or ban another moderator.
+
+`/mute` uses Discord's own timeout, so there is no muted role to keep in step
+with channel permissions. Its `length` is required, in the same `10m`, `2h`,
+`3d` form `/ban` takes, and cannot exceed Discord's 28-day limit; it is recorded
+as a timeout case against the member's standing. `/unmute` lifts the timeout
+early and files its own case, but leaves the timeout case on record, the same
+way `/unban` leaves the ban case.
 
 `/ban` takes an optional `length` such as `30m`, `1h30m`, `2d` or `1w`; omitting
 it bans permanently, and a temporary ban is lifted by the sweep described under
