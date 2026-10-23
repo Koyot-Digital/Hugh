@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# No `# syntax=` line: BuildKit's built-in Dockerfile frontend covers every
+# instruction here, and the downloaded one runs as a helper container that
+# has crashed builds on the home server ("frontend grpc server closed").
 FROM rust:1.97-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./

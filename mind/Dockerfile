@@ -1,8 +1,9 @@
-# syntax=docker/dockerfile:1
-# Hugh Mind for an NVIDIA card. The default index is CUDA 12.6, the newest
-# line that still ships kernels for GTX 10-series (Pascal, sm_61) cards;
-# `python -m hugh_mind check` refuses a build without them. A newer card can
-# build with --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu128.
+# Hugh Mind for an NVIDIA card. The default index is CUDA 12.6, whose builds
+# carry sm_60 code, which runs every GTX 10-series (Pascal) card;
+# `python -m hugh_mind check` refuses a build that cannot run the card. A
+# newer card can build with
+# --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu128.
+# Like ../Dockerfile, no `# syntax=` line: the built-in frontend is enough.
 FROM python:3.12-slim
 
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126

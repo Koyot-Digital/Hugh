@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -38,6 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if arguments.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s · %(message)s",
     )
+    # `docker compose kill -s USR1 mind-serve` prints every thread's stack
+    # to the log, which shows where a process that has gone quiet is stuck.
+    if hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     config = configuration.load(arguments.config)
     registry = Registry(config.registry_dir, config.encoder.base)
 
