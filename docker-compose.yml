@@ -21,9 +21,12 @@ services:
   # with [mind] endpoint = "http://mind-serve:8765" in config.toml. In
   # mind/mind.toml set data_dir = "/app/data" and [serve] host = "0.0.0.0".
   # The port is never published: only the Hugh container can reach it.
+  # Both services run one image, built once: with PyTorch's CUDA libraries it
+  # is around 11 GB, too much to build and export twice.
   mind-serve:
     profiles: [mind]
     build: ./mind
+    image: hugh-mind:latest
     command: [serve]
     restart: unless-stopped
     init: true
@@ -44,7 +47,9 @@ services:
 
   mind-train:
     profiles: [mind]
-    build: ./mind
+    image: hugh-mind:latest
+    # Built by mind-serve; never looked for on a registry.
+    pull_policy: never
     command: [daemon]
     restart: unless-stopped
     init: true
