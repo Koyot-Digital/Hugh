@@ -7,6 +7,13 @@ Versioning and the Keep a Changelog format.
 
 ### Added
 
+- ❌ **False positive** on an automod case card now reverses the punishment
+  for staff at the `/unwarn` level: the case stops costing standing, a
+  timeout or ban is lifted, and the member's running automod total starts
+  over. The reversal is filed as a case and the member is told by DM. Staff
+  below that level still teach Hugh Mind, and the card names the level that
+  can take the case back.
+
 - **Hugh Mind** (`mind/`), a model trained on the server's own history.
   - **What it reads**: each message, the author's last 32 messages and the
     channel's last 16, all through one transformer. A learned embedding per

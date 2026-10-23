@@ -10,7 +10,7 @@ use chrono::Utc;
 use serenity::{
     all::{
         CommandDataOption, CommandInteraction, CommandOptionType, Context, GuildId, Member,
-        Permissions, Timestamp, UserId,
+        Permissions, Timestamp, User, UserId,
     },
     builder::{
         CreateCommand, CreateCommandOption, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
@@ -650,6 +650,122 @@ async fn unwarn(
         .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
         .await?;
     Ok(())
+}
+
+/// What taking back a false positive undid, as phrases for the case card.
+#[derive(Debug)]
+pub struct Reversal {
+    pub case_id: u64,
+    pub undone: Vec<String>,
+}
+
+/// Takes back an automod case staff marked a false positive: the case stops
+/// costing standing, and a timeout or ban it carried is lifted. Returns
+/// `None` when the case had already been taken back. A deleted message and a
+/// kick cannot be undone; the card says so rather than pretending.
+pub async fn reverse_false_positive(
+    ctx: &Context,
+    config: &Config,
+    store: &ModerationStore,
+    incidents: &IncidentReporter,
+    moderator: &User,
+    case_id: u64,
+) -> Result<Option<Reversal>> {
+    let record = store
+        .revoke(case_id, Some(moderator.id.get()))
+        .await?
+        .with_context(|| format!("Case #{case_id} is not on the moderation record"))?;
+    if record.revoked {
+        return Ok(None);
+    }
+    let guild_id = GuildId::new(config.guild_id);
+    let target = UserId::new(record.user_id);
+    let audit = truncate(
+        &format!(
+            "Hugh · {} · Case #{case_id} was a false positive",
+            moderator.name
+        ),
+        AUDIT_LIMIT,
+    );
+    let mut undone = vec!["it no longer counts against their standing".to_owned()];
+    match record.kind {
+        Punishment::Timeout => {
+            let lifted = guild_id
+                .edit_member(
+                    &ctx.http,
+                    target,
+                    EditMember::new()
+                        .enable_communication()
+                        .audit_log_reason(&audit),
+                )
+                .await;
+            undone.push(match lifted {
+                Ok(_) => "their timeout is lifted".to_owned(),
+                Err(error) => {
+                    warn!(?error, case_id, "could not lift a false-positive timeout");
+                    "their timeout could not be lifted, so lift it by hand".to_owned()
+                }
+            });
+        }
+        Punishment::Ban | Punishment::TemporaryBan => {
+            match guild_id.unban(&ctx.http, target).await {
+                Ok(()) => {
+                    store.lift(case_id).await?;
+                    undone.push("their ban is lifted".to_owned());
+                }
+                Err(error) => {
+                    warn!(?error, case_id, "could not lift a false-positive ban");
+                    undone.push("their ban could not be lifted, so use /unban".to_owned());
+                }
+            }
+        }
+        Punishment::Kick => {
+            undone.push("the kick itself cannot be undone, but they are free to rejoin".to_owned());
+        }
+        Punishment::Warn | Punishment::Quarantine | Punishment::Automod => {}
+    }
+
+    let standing = store.standing(record.user_id, config).await;
+    let mut incident = Incident::new(
+        "case_revoked",
+        config.guild_id,
+        "false_positive_reversed",
+        format!("Case #{case_id} was marked a false positive"),
+    );
+    incident.moderator = Some(moderator.into());
+    incident.actor_id = Some(record.user_id);
+    incident
+        .details
+        .insert("target_user_id".into(), record.user_id.into());
+    incident
+        .details
+        .insert("revoked_case".into(), case_id.into());
+    incident
+        .details
+        .insert("punishment".into(), record.kind.label().into());
+    incident
+        .details
+        .insert("standing".into(), standing_text(&standing).into());
+    incidents.report(&ctx.http, incident).await;
+
+    if config.moderation.dm_on_action {
+        let content = format!(
+            "A moderator reviewed an automatic action Hugh took against you in the server and \
+             found it was a mistake. It has been taken back: {}.",
+            undone.join(", ")
+        );
+        if let Err(error) = target
+            .direct_message(ctx, CreateMessage::new().content(content))
+            .await
+        {
+            warn!(
+                ?error,
+                user_id = record.user_id,
+                "could not tell the member their case was taken back"
+            );
+        }
+    }
+    Ok(Some(Reversal { case_id, undone }))
 }
 
 async fn modlogs(

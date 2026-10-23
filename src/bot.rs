@@ -833,6 +833,7 @@ impl EventHandler for Handler {
                 rotector: self.rotector.as_deref(),
                 moderation: &self.moderation,
                 archive: self.archive.as_ref(),
+                state: &self.state,
             },
         )
         .await;

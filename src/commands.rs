@@ -9,7 +9,8 @@ use serenity::{
     },
     builder::{
         CreateCommand, CreateCommandOption, CreateEmbed, CreateInteractionResponse,
-        CreateInteractionResponseMessage, EditInteractionResponse,
+        CreateInteractionResponseFollowup, CreateInteractionResponseMessage,
+        EditInteractionResponse,
     },
 };
 use tracing::{error, info};
@@ -24,6 +25,7 @@ use crate::{
     quarantine::{QuarantineManager, QuarantineStore},
     rotector::RotectorClient,
     scrape,
+    state::SecurityState,
 };
 
 pub const REPOSITORY_URL: &str = "https://github.com/Koyot-Digital/Hugh";
@@ -182,6 +184,8 @@ pub struct Services<'a> {
     pub rotector: Option<&'a RotectorClient>,
     pub moderation: &'a ModerationStore,
     pub archive: Option<&'a Archive>,
+    /// The automod's rolling windows, so a false positive can be forgiven.
+    pub state: &'a SecurityState,
 }
 
 pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services<'_>) {
@@ -192,12 +196,12 @@ pub async fn handle(ctx: &Context, interaction: Interaction, services: &Services
         incidents,
         rotector,
         moderation,
-        archive,
+        ..
     } = services;
     let command = match interaction {
         Interaction::Command(command) => command,
         Interaction::Component(component) => {
-            component_pressed(ctx, &component, config, incidents, archive).await;
+            component_pressed(ctx, &component, services).await;
             return;
         }
         _ => return,
@@ -743,10 +747,11 @@ fn merged_overwrite(
 async fn component_pressed(
     ctx: &Context,
     component: &ComponentInteraction,
-    config: &Config,
-    incidents: &IncidentReporter,
-    archive: Option<&Archive>,
+    services: &Services<'_>,
 ) {
+    let &Services {
+        config, incidents, ..
+    } = services;
     if component
         .guild_id
         .is_none_or(|guild| guild.get() != config.guild_id)
@@ -754,18 +759,31 @@ async fn component_pressed(
         return;
     }
     if mind::is_feedback_button(&component.data.custom_id) {
-        if let Err(error) = mind::handle_feedback(ctx, component, config, archive).await {
+        if let Err(error) = mind::handle_feedback(ctx, component, services).await {
             error!(?error, "failed to keep a Hugh Mind verdict");
-            let _ = component
+            let message = format!("Hugh could not finish that: {error}");
+            // The press may already have been acknowledged, in which case
+            // only a follow-up can still reach the moderator.
+            let answered = component
                 .create_response(
                     &ctx.http,
                     CreateInteractionResponse::Message(
                         CreateInteractionResponseMessage::new()
-                            .content(format!("Hugh could not keep that verdict: {error}"))
+                            .content(message.clone())
                             .ephemeral(true),
                     ),
                 )
                 .await;
+            if answered.is_err() {
+                let _ = component
+                    .create_followup(
+                        &ctx.http,
+                        CreateInteractionResponseFollowup::new()
+                            .content(message)
+                            .ephemeral(true),
+                    )
+                    .await;
+            }
         }
         return;
     }

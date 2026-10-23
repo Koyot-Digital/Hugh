@@ -285,6 +285,20 @@ training run learns from at triple weight. Who may press them is the
 also keeps that message's text through retention, because it is training
 data.
 
+❌ **False positive** on an automod case card also reverses the punishment,
+when the moderator holds the level `/unwarn` needs (`admin` by default):
+
+- the case stops costing standing, exactly as `/unwarn` would
+- a timeout is lifted, and a ban is lifted and marked served
+- the member's running automod total starts over, so the wrongly counted
+  weight cannot push them into the next escalation step
+
+A kick and a deleted message cannot be undone, and the card says so. The
+reversal is filed as its own case, and the member is told by DM when
+`moderation.dm_on_action` is on. Somebody below that level can still mark a
+false positive for Hugh Mind to learn from, and the card tells them who can
+take the case back.
+
 ## `[lock]`
 
 - `restricted_role_ids`: the roles `/lock` silences. With none listed it falls

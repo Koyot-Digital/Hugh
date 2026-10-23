@@ -345,14 +345,18 @@ fn action_icon(action: &str) -> &'static str {
     }
     match action {
         "message_deleted" | "delete_failed" => "deleted",
-        "message_deleted_and_member_timed_out" | "timed_out" => "timeout",
+        "message_deleted_and_member_timed_out" | "timed_out" | "member_timed_out" => "timeout",
         "kicked" | "member_kicked" | "message_deleted_and_member_kicked" => "kicked",
         "member_warned" => "warn",
         "member_banned" | "member_temporarily_banned" | "message_deleted_and_member_banned" => {
             "ban"
         }
         "member_unbanned" | "ban_expired" => "unban",
-        "warning_revoked" | "channel_unlocked" | "member_released" => "release",
+        "warning_revoked"
+        | "false_positive_reversed"
+        | "member_unmuted"
+        | "channel_unlocked"
+        | "member_released" => "release",
         "raid_mode_enabled" => "raid",
         "logged" => "review",
         "roles_removed" => "role",
@@ -377,7 +381,7 @@ fn action_phrase(action: &str) -> String {
         "enforcement_failed" => "Enforcement failed",
         "raid_mode_enabled" => "Raid mode enabled",
         "logged" => "Logged for review, nothing enforced",
-        "timed_out" => "Member timed out",
+        "timed_out" | "member_timed_out" => "Member timed out",
         "kicked" | "member_kicked" => "Member kicked",
         "roles_removed" => "Protected roles removed",
         "role_removal_failed" => "Protected roles could not be removed",
@@ -388,6 +392,8 @@ fn action_phrase(action: &str) -> String {
         "channel_unlocked" => "Channel unlocked",
         "member_warned" => "Member warned",
         "warning_revoked" => "Case taken back",
+        "false_positive_reversed" => "False positive · case taken back",
+        "member_unmuted" => "Timeout lifted",
         "member_banned" => "Member banned",
         "member_temporarily_banned" => "Member banned temporarily",
         "member_unbanned" => "Ban lifted",

@@ -311,6 +311,18 @@ impl SecurityState {
         }
     }
 
+    /// Starts a member's running automod total over, after staff found that
+    /// a hit was a false positive. Without this the wrongly counted weight
+    /// would keep pushing them towards the next escalation step for the rest
+    /// of the window.
+    pub fn forgive(&self, user_id: u64) {
+        let mut state = lock(&self.message);
+        if let Some(activity) = state.users.get_mut(&user_id) {
+            activity.weights.clear();
+            activity.escalated = None;
+        }
+    }
+
     pub fn inspect_join(
         &self,
         config: &Config,
@@ -928,6 +940,39 @@ mod tests {
             steps,
             vec![Some(Escalation::Kick), None, Some(Escalation::Ban)]
         );
+    }
+
+    /// Once staff call a hit a false positive, its weight stops counting, so
+    /// the member's next slip starts from nothing rather than a step short of
+    /// a kick.
+    #[test]
+    fn a_forgiven_member_starts_their_running_total_over() {
+        let mut config = config();
+        config.spam.enabled = false;
+        config.content.enabled = false;
+        config.automod.enabled = false;
+        config.standing.violations.mass_mention = 6.0;
+        config.escalation.timeout_at = 5.0;
+        config.escalation.kick_at = 10.0;
+        let state = SecurityState::new(&config);
+        let start = Instant::now();
+        let input = MessageInput {
+            total_mentions: 10,
+            ..message(3, "look at me")
+        };
+
+        let first = state.inspect_message(&input, &config, start);
+        assert_eq!(first.escalation, Some(Escalation::Timeout));
+        state.forgive(3);
+        let next = state.inspect_message(&input, &config, start + Duration::from_secs(1));
+        assert!((next.recent_weight - 6.0).abs() < f64::EPSILON);
+        assert_eq!(
+            next.escalation,
+            Some(Escalation::Timeout),
+            "back to the first step, not on to a kick"
+        );
+        // Forgiving somebody Hugh has never seen is harmless.
+        state.forgive(99);
     }
 
     /// A clean message leaves no weight behind, so nothing accumulates towards

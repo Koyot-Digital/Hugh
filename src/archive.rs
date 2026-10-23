@@ -154,6 +154,17 @@ enum Op {
         id: u64,
         case_id: Option<u64>,
     },
+    CaseFor {
+        message_id: u64,
+        reply: oneshot::Sender<Option<CaseLink>>,
+    },
+}
+
+/// The case Hugh's automod opened over a message, and whose message it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaseLink {
+    pub case_id: u64,
+    pub author_id: u64,
 }
 
 /// The handle the gateway holds. Cheap to clone: every clone feeds the same
@@ -246,6 +257,16 @@ impl Archive {
     /// retention and the size ceiling never drop it.
     pub fn flag(&self, id: u64, case_id: Option<u64>) {
         self.send(Op::Flag { id, case_id });
+    }
+
+    /// The automod case over a message, when there is one. Asked through the
+    /// writer's queue, so it sees a case number filed a moment earlier.
+    pub async fn case_for(&self, message_id: u64) -> Option<CaseLink> {
+        let (reply, answer) = oneshot::channel();
+        if !self.send(Op::CaseFor { message_id, reply }) {
+            return None;
+        }
+        answer.await.ok().flatten()
     }
 
     pub fn score(&self, row: ScoreRow) {
@@ -350,6 +371,7 @@ impl Writer {
     fn apply(&mut self, batch: Vec<Op>) -> Result<()> {
         let mut edits = Vec::new();
         let mut deletions = Vec::new();
+        let mut lookups = Vec::new();
         let transaction = self.connection.transaction()?;
         for op in batch {
             match op {
@@ -364,6 +386,22 @@ impl Writer {
                     deleted_at,
                     reply,
                 } => deletions.push((reply, delete(&transaction, &ids, deleted_at)?)),
+                Op::CaseFor { message_id, reply } => {
+                    let link = transaction
+                        .query_row(
+                            "SELECT case_id, author_id FROM messages \
+                             WHERE id = ?1 AND case_id IS NOT NULL",
+                            [sql_id(message_id)],
+                            |row| {
+                                Ok(CaseLink {
+                                    case_id: from_sql(row.get(0)?),
+                                    author_id: from_sql(row.get(1)?),
+                                })
+                            },
+                        )
+                        .optional()?;
+                    lookups.push((reply, link));
+                }
                 Op::Flag { id, case_id } => {
                     transaction.execute(
                         "UPDATE messages SET flagged = 1, case_id = COALESCE(?2, case_id) \
@@ -408,6 +446,9 @@ impl Writer {
         }
         for (reply, rows) in deletions {
             let _ = reply.send(rows);
+        }
+        for (reply, link) in lookups {
+            let _ = reply.send(link);
         }
         Ok(())
     }
@@ -716,6 +757,17 @@ mod tests {
         archive.flag(1, Some(42));
         // The case number is never wiped by a later flag that lacks one.
         archive.flag(1, None);
+        archive.record(message(2, 1_000, "chat"));
+
+        assert_eq!(
+            archive.case_for(1).await,
+            Some(CaseLink {
+                case_id: 42,
+                author_id: 20
+            })
+        );
+        assert_eq!(archive.case_for(2).await, None, "nothing was done over it");
+        assert_eq!(archive.case_for(3).await, None, "never archived");
 
         let removed = archive.delete(vec![1], 2_000).await;
         assert!(removed[0].flagged);

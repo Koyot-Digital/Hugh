@@ -20,17 +20,17 @@ use serenity::{
     builder::{
         CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedAuthor,
         CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage,
-        CreateMessage,
+        CreateMessage, EditInteractionResponse,
     },
 };
 use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::{
-    archive::{Archive, ScoreRow},
-    commands::member_level,
-    config::{Config, MindConfig, MindMode},
-    discipline::truncate,
+    archive::{Archive, CaseLink, ScoreRow},
+    commands::{Services, member_level},
+    config::{AccessLevel, Config, MindConfig, MindMode},
+    discipline::{self, truncate},
     features,
     incident::UserSnapshot,
     message_log::quote,
@@ -336,9 +336,9 @@ fn parse_feedback(custom_id: &str) -> Option<(u64, bool)> {
 pub async fn handle_feedback(
     ctx: &Context,
     component: &ComponentInteraction,
-    config: &Config,
-    archive: Option<&Archive>,
+    services: &Services<'_>,
 ) -> Result<()> {
+    let config = services.config;
     let (message_id, verdict) =
         parse_feedback(&component.data.custom_id).context("that button is not one Hugh made")?;
     let member = component
@@ -366,29 +366,81 @@ pub async fn handle_feedback(
             .await?;
         return Ok(());
     }
-    let archive = archive.context("the archive is off, so there is nowhere to keep the verdict")?;
+    let archive = services
+        .archive
+        .context("the archive is off, so there is nowhere to keep the verdict")?;
+    // Taking a case back can mean several calls to Discord, longer than the
+    // three seconds an interaction allows, so the press is answered first.
+    component
+        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+        .await?;
     archive.feedback(
         message_id,
         component.user.id.get(),
         verdict,
         Utc::now().timestamp_millis(),
     );
-    let note = if verdict {
-        "✅ Needed action"
-    } else {
-        "❌ Was fine"
+    let case = archive.case_for(message_id).await;
+    let note = match (verdict, case) {
+        (true, _) => "✅ Needed action".to_owned(),
+        (false, None) => "❌ Was fine".to_owned(),
+        (false, Some(link)) => format!(
+            "❌ False positive{}",
+            take_back(ctx, component, services, link, level).await?
+        ),
     };
-    let update = CreateInteractionResponseMessage::new()
+    let update = EditInteractionResponse::new()
         .content(format!(
-            "{note} · marked by <@{}>. Hugh Mind learns from it at its next training run.",
+            "{note}\nMarked by <@{}>. Hugh Mind learns from it at its next training run.",
             component.user.id
         ))
         .components(Vec::new())
         .allowed_mentions(CreateAllowedMentions::new());
-    component
-        .create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(update))
-        .await?;
+    component.edit_response(&ctx.http, update).await?;
     Ok(())
+}
+
+/// Reverses the automod case behind a false positive, for staff allowed to
+/// take cases back. Returns the sentence the card gains.
+async fn take_back(
+    ctx: &Context,
+    component: &ComponentInteraction,
+    services: &Services<'_>,
+    link: CaseLink,
+    level: AccessLevel,
+) -> Result<String> {
+    // The verdict teaches the model whoever presses it; undoing the
+    // punishment is the same act as /unwarn and needs the same level.
+    let required = services.config.required_level("unwarn");
+    if level < required {
+        return Ok(format!(
+            " · Case #{} still counts: taking it back needs the **{}** level (`/unwarn case:{}`)",
+            link.case_id,
+            required.as_str(),
+            link.case_id
+        ));
+    }
+    let reversal = discipline::reverse_false_positive(
+        ctx,
+        services.config,
+        services.moderation,
+        services.incidents,
+        &component.user,
+        link.case_id,
+    )
+    .await?;
+    let Some(reversal) = reversal else {
+        return Ok(format!(
+            " · Case #{} had already been taken back",
+            link.case_id
+        ));
+    };
+    services.state.forgive(link.author_id);
+    Ok(format!(
+        " · Case #{} taken back: {}, and their automod count starts over",
+        reversal.case_id,
+        reversal.undone.join(", ")
+    ))
 }
 
 #[cfg(test)]
